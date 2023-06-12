@@ -70,13 +70,13 @@ Anima模型基于QLoRA开源的[33B guanaco](https://huggingface.co/timdettmers/
 
 #### 评估方法论
 
-* **数据集的选择**：如[Belle Paper](https://github.com/LianjiaTech/BELLE/blob/main/docs/Towards%20Better%20Instruction%20Following%20Language%20Models%20for%20Chinese.pdf)中论述，评估集的不同类型分布对于评估结论影响巨大。如田忌赛马，以己之长攻人之短，很容易占优势。因此我们选择了英文chatbot模型研究工作中比较普遍公认的[Vicuna benchmark](https://lmsys.org/blog/2023-03-30-vicuna/)。为了评测中文，我们使用GPT4对于问题做了翻译。[翻译代码](https://github.com/lyogavin/Anima/blob/main/data/gpt4_translate_vicuna_eval_set.ipynb)和[数据集](https://github.com/lyogavin/Anima/blob/main/data/translated_vicuna_eval_set.json)。
+* **数据集的选择**：如[Belle Paper](https://github.com/LianjiaTech/BELLE/blob/main/docs/Towards%20Better%20Instruction%20Following%20Language%20Models%20for%20Chinese.pdf)中论述，评估集的不同类型分布对于评估结论影响巨大。如田忌赛马，以己之长攻人之短，很容易占优势。因此我们选择了英文chatbot模型研究工作中比较普遍公认的[Vicuna benchmark](https://lmsys.org/blog/2023-03-30-vicuna/)。为了评测中文，我们使用GPT4对于问题做了翻译。[![Open Anima in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/lyogavin/Anima/blob/main/data/gpt4_translate_vicuna_eval_set.ipynb) [翻译代码](https://github.com/lyogavin/Anima/blob/main/data/gpt4_translate_vicuna_eval_set.ipynb)和[数据集](https://github.com/lyogavin/Anima/blob/main/data/translated_vicuna_eval_set.json)。
 * **评估方法**: 为了平衡成本，我们主要采用GPT4进行评估。如[QLoRA](https://arxiv.org/abs/2305.14314) 论证，单纯GPT4打分进行模型的对比随机波动性较大。这与我们的观察一致。因此采用了[QLoRA](https://arxiv.org/abs/2305.14314) 推荐的，现在比较普遍采用的Elo Rating tournament评测方法。
 * **超参选择**：出于成本考虑，我们选择：300轮随机评估，随机选择模型PK的先后顺序以抵消先后顺序的影响，随机种子为：42。Elo rating的实现代码和其他超参参照[Vicuna的Elo代码](https://raw.githubusercontent.com/lm-sys/FastChat/833d65032a715240a3978f4a8f08e7a496c83cb1/fastchat/serve/monitor/elo_analysis.py): K=32, init rating=1000。
 
 #### Elo rating tournament过程代码
 
-[elo_tournanment_all_models_on_translated_vicuna.ipynb](https://github.com/lyogavin/Anima/blob/main/eval/elo_tournanment_all_models_on_translated_vicuna.ipynb)
+[![Open Anima in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/lyogavin/Anima/blob/main/eval/elo_tournanment_all_models_on_translated_vicuna.ipynb) [elo_tournanment_all_models_on_translated_vicuna.ipynb](https://github.com/lyogavin/Anima/blob/main/eval/elo_tournanment_all_models_on_translated_vicuna.ipynb)
 
 #### 结论
 
@@ -90,7 +90,9 @@ Anima模型只通过10000 steps的训练，并没有深度优化训练数据的�
 
 	pip install -r https://github.com/lyogavin/Anima/blob/main/requirements.txt?raw=true
 	
-可以参考：[inferrence.ipynb](https://github.com/lyogavin/Anima/blob/main/examples/inferrence.ipynb)
+可以参考：
+
+[![Open Anima in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/lyogavin/Anima/blob/main/examples/inferrence.ipynb) 
 
 或者使用如下代码：
 	
