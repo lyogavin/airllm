@@ -7,7 +7,16 @@
 *Read this in [English](README_en.md).*
 
 
-## 😄Huggingface模型开源地址
+<div align="left">
+
+<a href="https://github.com/lyogavin/Anima/stargazers">![GitHub Repo stars](https://img.shields.io/github/stars/lyogavin/Anima?style=social)</a>
+[![Code License](https://img.shields.io/badge/Code%20License-Apache_2.0-green.svg)](https://github.com/LianjiaTech/BELLE/blob/main/LICENSE)
+[![Generic badge](https://img.shields.io/badge/wechat-Anima-brightgreen?logo=wechat)](https://static.aicompose.cn/static/wecom_barcode.png?t=1671918938)
+[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B)
+</div>
+
+
+## 🤗Huggingface模型开源地址
 
 [lyogavin/Anima33B](https://huggingface.co/lyogavin/Anima33B)
 
@@ -61,7 +70,7 @@ Anima模型基于QLoRA开源的[33B guanaco](https://huggingface.co/timdettmers/
 
 #### 评估方法论
 
-* **数据集的选择**：如[Belle Paper](https://github.com/LianjiaTech/BELLE/blob/main/docs/Towards%20Better%20Instruction%20Following%20Language%20Models%20for%20Chinese.pdf)中论述，评估集的不同类型分布对于评估结论影响巨大。如田忌赛马，以己之长攻人之短，很容易占优势。因此我们选择了英文chatbot模型研究工作中比较普遍公认的[Vicuna benchmark](https://lmsys.org/blog/2023-03-30-vicuna/)。为了评测中文，我们使用GPT4对于问题做了翻译。翻译代码和[数据集]([elo_tournanment_all_models_on_translated_vicuna.ipynb](https://github.com/lyogavin/Anima/blob/main/data/translated_vicuna_eval_set.json))。
+* **数据集的选择**：如[Belle Paper](https://github.com/LianjiaTech/BELLE/blob/main/docs/Towards%20Better%20Instruction%20Following%20Language%20Models%20for%20Chinese.pdf)中论述，评估集的不同类型分布对于评估结论影响巨大。如田忌赛马，以己之长攻人之短，很容易占优势。因此我们选择了英文chatbot模型研究工作中比较普遍公认的[Vicuna benchmark](https://lmsys.org/blog/2023-03-30-vicuna/)。为了评测中文，我们使用GPT4对于问题做了翻译。[翻译代码](https://github.com/lyogavin/Anima/blob/main/data/gpt4_translate_vicuna_eval_set.ipynb)和[数据集](https://github.com/lyogavin/Anima/blob/main/data/translated_vicuna_eval_set.json)。
 * **评估方法**: 为了平衡成本，我们主要采用GPT4进行评估。如[QLoRA](https://arxiv.org/abs/2305.14314) 论证，单纯GPT4打分进行模型的对比随机波动性较大。这与我们的观察一致。因此采用了[QLoRA](https://arxiv.org/abs/2305.14314) 推荐的，现在比较普遍采用的Elo Rating tournament评测方法。
 * **超参选择**：出于成本考虑，我们选择：300轮随机评估，随机选择模型PK的先后顺序以抵消先后顺序的影响，随机种子为：42。Elo rating的实现代码和其他超参参照[Vicuna的Elo代码](https://raw.githubusercontent.com/lm-sys/FastChat/833d65032a715240a3978f4a8f08e7a496c83cb1/fastchat/serve/monitor/elo_analysis.py): K=32, init rating=1000。
 
@@ -168,7 +177,7 @@ Anima模型只通过10000 steps的训练，并没有深度优化训练数据的�
 
 ## ✍️Who We Are?
 
-此工作来自于[艾写科技](https://aicompose.cn/about)。我们团队来自于硅谷，有多年中、美大厂的一线AI工作经验。
+此工作来自于[艾写科技](https://aicompose.cn/about)<img src=https://static.aicompose.cn/static/logo/aiwrite_logo.png?t=1674771897  width="99">。我们团队来自于硅谷，有多年中、美大厂的一线AI工作经验。
 
 我们致力于通过最新的AGI，LLM技术为内容创作提供下一代的内容创作工具。
 
