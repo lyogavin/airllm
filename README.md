@@ -49,12 +49,13 @@ Anima模型基于QLoRA开源的[33B guanaco](https://huggingface.co/timdettmers/
 
 使用以下步骤可以重现Anima 33B模型：
 
-	# 1. install dependencies
-	pip install -r requirements.txt
-	# 2. 
-	cd training
-	./run_Amina_training.sh
-
+```bash
+# 1. install dependencies
+pip install -r requirements.txt
+# 2. 
+cd training
+./run_Amina_training.sh
+```
 
 
 ## 📊验证评估
@@ -88,7 +89,9 @@ Anima模型只通过10000 steps的训练，并没有深度优化训练数据的�
 
 首先保证依赖都已经安装：
 
-	pip install -r https://github.com/lyogavin/Anima/blob/main/requirements.txt?raw=true
+``` bash
+pip install -r https://github.com/lyogavin/Anima/blob/main/requirements.txt?raw=true
+```
 	
 可以参考：
 
@@ -96,42 +99,43 @@ Anima模型只通过10000 steps的训练，并没有深度优化训练数据的�
 
 或者使用如下代码：
 	
-	# imports
-	from peft import PeftModel
-	from transformers import GenerationConfig, LlamaForCausalLM, LlamaTokenizer
-	import torch
+``` python
+# imports
+from peft import PeftModel
+from transformers import GenerationConfig, LlamaForCausalLM, LlamaTokenizer
+import torch
 
-	# create tokenizer
-	base_model = "timdettmers/guanaco-33b-merged"
-	tokenizer = LlamaTokenizer.from_pretrained(base_model)
+# create tokenizer
+base_model = "timdettmers/guanaco-33b-merged"
+tokenizer = LlamaTokenizer.from_pretrained(base_model)
 	
-	# base model
-	model = LlamaForCausalLM.from_pretrained(
-            base_model,
-            torch_dtype=torch.float16,
-            device_map="auto",
-        )
-        
-       # LORA PEFT adapters
-	adapter_model = "lyogavin/Anima33B"
+# base model
+model = LlamaForCausalLM.from_pretrained(
+        base_model,
+        torch_dtype=torch.float16,
+        device_map="auto",
+    )
+    
+# LORA PEFT adapters
+adapter_model = "lyogavin/Anima33B"
 
-	model = PeftModel.from_pretrained(
-            model,
-            adapter_model,
-            #torch_dtype=torch.float16,
-        )
-	model.eval()
+model = PeftModel.from_pretrained(
+        model,
+        adapter_model,
+        #torch_dtype=torch.float16,
+    )
+model.eval()
 	
-	# prompt
-	prompt = "中国的首都是哪里？"
-	inputs = tokenizer(prompt, return_tensors="pt")
+# prompt
+prompt = "中国的首都是哪里？"
+inputs = tokenizer(prompt, return_tensors="pt")
 	
-	# Generate
-	generate_ids = model.generate(**inputs, max_new_tokens=30)
-	print(tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0])
+# Generate
+generate_ids = model.generate(**inputs, max_new_tokens=30)
+print(tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0])
 	
-	# output: '中国的首都是哪里？\n中国的首都是北京。\n北京位于中国北部，是中国历史悠'
-
+# output: '中国的首都是哪里？\n中国的首都是北京。\n北京位于中国北部，是中国历史悠'
+```
 ## 📚 模型使用例子
 
 <details>
