@@ -34,7 +34,7 @@
 * Max steps: 10000 ([QLoRA](https://arxiv.org/abs/2305.14314) Appendix B.4和Table 9)，更多的steps和更大的数据集的训练在进一步实验中，后续会持续更新。
 * Learning rate: 1e-4 ([QLoRA](https://arxiv.org/abs/2305.14314) Appendix B.4和Table 9)
 * LoRA r=64, alpha=16 ([QLoRA](https://arxiv.org/abs/2305.14314) Appendix B.2)
-* source_max_len=512, target_max_len=512，需要保证大部分的training sample没有truncate，能完整的把信息训练到模型中，根据脚本()中的估计，512大概可以覆盖大部分的样本长度。
+* source_max_len=512, target_max_len=512，需要保证大部分的training sample没有truncate，能完整的把信息训练到模型中，根据[脚本](https://github.com/lyogavin/Anima/blob/main/scripts/test_cn_dataset_lenghts.py)中的估计，512大概可以覆盖大部分的样本长度。
 
 #### 如何训练
 
