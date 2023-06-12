@@ -81,7 +81,7 @@ Anima模型只通过10000 steps的训练，并没有深度优化训练数据的�
 
 	pip install -r https://github.com/lyogavin/Anima/blob/main/requirements.txt?raw=true
 	
-可以参考：[inferrence.ipynb]
+可以参考：[inferrence.ipynb](https://github.com/lyogavin/Anima/blob/main/examples/inferrence.ipynb)
 
 或者使用如下代码：
 	
