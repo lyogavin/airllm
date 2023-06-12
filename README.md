@@ -18,7 +18,7 @@
 
 ## 🤗Huggingface模型开源地址
 
-[lyogavin/Anima33B](https://huggingface.co/lyogavin/Anima33B)
+[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B) [lyogavin/Anima33B](https://huggingface.co/lyogavin/Anima33B)
 
 ## 🚀模型训练
 
