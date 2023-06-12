@@ -7,7 +7,16 @@
 *Read this in [English](README_en.md).*
 
 
-## 😄Huggingface模型开源地址
+<div align="center">
+
+<a href="https://github.com/lyogavin/Anima/stargazers">![GitHub Repo stars](https://img.shields.io/github/stars/lyogavin/Anima?style=social)</a>
+[![Code License](https://img.shields.io/badge/Code%20License-Apache_2.0-green.svg)](https://github.com/LianjiaTech/BELLE/blob/main/LICENSE)
+[![Generic badge](https://img.shields.io/badge/wechat-Anima-brightgreen?logo=wechat)](https://static.aicompose.cn/static/wecom_barcode.png?t=1671918938)
+[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B)
+</div>
+
+
+## 🤗Huggingface模型开源地址
 
 [lyogavin/Anima33B](https://huggingface.co/lyogavin/Anima33B)
 
