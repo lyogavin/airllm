@@ -15,7 +15,7 @@
 
 #### Backbone模型选择
 
-基于QLoRA开源的[33B guanaco](https://huggingface.co/timdettmers/guanaco-33b)训练。
+Anima模型基于QLoRA开源的[33B guanaco](https://huggingface.co/timdettmers/guanaco-33b)训练了10000 steps。训练使用一个H100 GPU。
 
 * **思考逻辑**：本工作主要为了验证QLoRA训练方法的有效性，因此选择了基于QLoRA的Guanaco 33B finetune训练，这个训练更多的是增强模型的中文能力。Assume模型的基础logical reasoning和Knowledge能力已经足够。
 
@@ -65,6 +65,12 @@
 * **评估方法**: 为了平衡成本，我们主要采用GPT4进行评估。如[QLoRA](https://arxiv.org/abs/2305.14314) 论证，单纯GPT4打分进行模型的对比随机波动性较大。这与我们的观察一致。因此采用了[QLoRA](https://arxiv.org/abs/2305.14314) 推荐的，现在比较普遍采用的Elo Rating tournament评测方法。
 * **超参选择**：出于成本考虑，我们选择：300轮随机评估，随机选择模型PK的先后顺序以抵消先后顺序的影响，随机种子为：42。Elo rating的实现代码和其他超参参照[Vicuna的Elo代码](https://raw.githubusercontent.com/lm-sys/FastChat/833d65032a715240a3978f4a8f08e7a496c83cb1/fastchat/serve/monitor/elo_analysis.py): K=32, init rating=1000。
 
+#### 结论
+
+LLM模型最重要的还是logical reasoning的能力和encode knowledge的能力。因此模型的规模还是最重要的因素。通过QLoRA的方式可以让我们以足够低的成本finetune优化给定硬件条件下最大的模型。从而达到最优的效果。
+
+Anima模型只通过10000 steps的训练，并没有深度优化训练数据的质量，就已经达到了最优的中文模型的效果。
+
 # 如何Inferrence
 
 首先保证依赖都已经安装：
@@ -81,10 +87,10 @@
 	import torch
 
 	# create tokenizer
+	base_model = "timdettmers/guanaco-33b-merged"
 	tokenizer = LlamaTokenizer.from_pretrained(base_model)
 	
 	# base model
-	base_model = "timdettmers/guanaco-33b-merged"
 	model = LlamaForCausalLM.from_pretrained(
             base_model,
             torch_dtype=torch.float16,
@@ -92,7 +98,7 @@
         )
         
        # LORA PEFT adapters
-	adapter_model ="/home/ubuntu/cloudfs/saved_models/qlora_cn/output_1686031465/checkpoint-10000/adapter_model"
+	adapter_model ="lyogavin/Anima33B"
 
 	model = PeftModel.from_pretrained(
             model,
