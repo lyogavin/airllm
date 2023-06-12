@@ -36,6 +36,18 @@
 * LoRA r=64, alpha=16 ([QLoRA](https://arxiv.org/abs/2305.14314) Appendix B.2)
 * source_max_len=512, target_max_len=512，需要保证大部分的training sample没有truncate，能完整的把信息训练到模型中，根据脚本()中的估计，512大概可以覆盖大部分的样本长度。
 
+#### 如何训练
+
+使用以下步骤可以重现Anima 33B模型：
+
+	# 1. install dependencies
+	pip install -r requirements.txt
+	# 2. 
+	cd training
+	./run_Amina_training.sh
+
+
+
 ## 验证评估
 
 #### Elo rating tournament结论
@@ -52,6 +64,52 @@
 * **数据集的选择**：如[Belle Paper](https://github.com/LianjiaTech/BELLE/blob/main/docs/Towards%20Better%20Instruction%20Following%20Language%20Models%20for%20Chinese.pdf)中论述，评估集的不同类型分布对于评估结论影响巨大。如田忌赛马，以己之长攻人之短，很容易占优势。因此我们选择了英文chatbot模型研究工作中比较普遍公认的[Vicuna benchmark](https://lmsys.org/blog/2023-03-30-vicuna/)。为了评测中文，我们使用GPT4对于问题做了翻译。翻译代码和数据集如下：。
 * **评估方法**: 为了平衡成本，我们主要采用GPT4进行评估。如[QLoRA](https://arxiv.org/abs/2305.14314) 论证，单纯GPT4打分进行模型的对比随机波动性较大。这与我们的观察一致。因此采用了[QLoRA](https://arxiv.org/abs/2305.14314) 推荐的，现在比较普遍采用的Elo Rating tournament评测方法。
 * **超参选择**：出于成本考虑，我们选择：300轮随机评估，随机选择模型PK的先后顺序以抵消先后顺序的影响，随机种子为：42。Elo rating的实现代码和其他超参参照[Vicuna的Elo代码](https://raw.githubusercontent.com/lm-sys/FastChat/833d65032a715240a3978f4a8f08e7a496c83cb1/fastchat/serve/monitor/elo_analysis.py): K=32, init rating=1000。
+
+# 如何Inferrence
+
+首先保证依赖都已经安装：
+
+	pip install -r https://github.com/lyogavin/Anima/blob/main/requirements.txt?raw=true
+	
+可以参考：[inferrence.ipynb]
+
+或者使用如下代码：
+	
+	# imports
+	from peft import PeftModel
+	from transformers import GenerationConfig, LlamaForCausalLM, LlamaTokenizer
+	import torch
+
+	# create tokenizer
+	tokenizer = LlamaTokenizer.from_pretrained(base_model)
+	
+	# base model
+	base_model = "timdettmers/guanaco-33b-merged"
+	model = LlamaForCausalLM.from_pretrained(
+            base_model,
+            torch_dtype=torch.float16,
+            device_map="auto",
+        )
+        
+       # LORA PEFT adapters
+	adapter_model ="/home/ubuntu/cloudfs/saved_models/qlora_cn/output_1686031465/checkpoint-10000/adapter_model"
+
+	model = PeftModel.from_pretrained(
+            model,
+            adapter_model,
+            #torch_dtype=torch.float16,
+        )
+	model.eval()
+	
+	# prompt
+	prompt = "中国的首都是哪里？"
+	inputs = tokenizer(prompt, return_tensors="pt")
+	
+	# Generate
+	generate_ids = model.generate(**inputs, max_new_tokens=30)
+	print(tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0])
+	
+	# output: '中国的首都是哪里？\n中国的首都是北京。\n北京位于中国北部，是中国历史悠'
 
 ## Who We Are?
 
