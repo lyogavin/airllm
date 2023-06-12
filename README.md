@@ -13,20 +13,20 @@
 
 ## 模型训练
 
-### Backbone模型选择
+#### Backbone模型选择
 
 基于QLoRA开源的[33B guanaco](https://huggingface.co/timdettmers/guanaco-33b)训练。
 
-* 思考逻辑：本工作主要为了验证QLoRA训练方法的有效性，因此选择了基于QLoRA的Guanaco 33B finetune训练，这个训练更多的是增强模型的中文能力。Assume模型的基础logical reasoning和Knowledge能力已经足够。
+* **思考逻辑**：本工作主要为了验证QLoRA训练方法的有效性，因此选择了基于QLoRA的Guanaco 33B finetune训练，这个训练更多的是增强模型的中文能力。Assume模型的基础logical reasoning和Knowledge能力已经足够。
 
-### 训练数据选择
+#### 训练数据选择
 
 使用[Chinese-Vicuna](https://github.com/Facico/Chinese-Vicuna)项目开放的训练数据集[guanaco_belle_merge_v1.0](https://huggingface.co/datasets/Chinese-Vicuna/guanaco_belle_merge_v1.0)进行finetune训练。
 
 * **思考逻辑**：按照[QLoRA](https://arxiv.org/abs/2305.14314) Appendix B.4和Table 9中的Grid Search的结论：对于QLoRA finetune，training sample量不一定越大越好。10000个steps是一个ROI比较优的size。因此我们希望选择一个不小于10000个steps的数据集。[Belle 10M](https://github.com/LianjiaTech/BELLE/blob/main/data/10M)数据集似乎太大了，不确定数据质量如何。时间有限，先选择guanaco_belle_merge_v1.0。后边会进一步更系统性的测试更多的数据集和数据质量筛选的效果。
 * **感谢**：Chinese-Vicuna项目、Belle项目、GuanacoDataset的贡献。
 
-### 超参选择
+#### 超参选择
 
 基于成本ROI平衡的考虑，没有做太多的grid search，基本的思路是follow [QLoRA paper](https://arxiv.org/abs/2305.14314) 的结论，因为QLoRA做了相对比较详尽的超参Grid Search实验：
 
@@ -38,7 +38,7 @@
 
 ## 验证评估
 
-### Elo rating tournament结论
+#### Elo rating tournament结论
 
 | Model             | Elo     | Rank |
 |-------------------|---------|------|
@@ -47,7 +47,7 @@
 | Belle             | 937.71  | 3    |
 | Chinese Vicuna    | 623.62  | 4    |
 
-### 评估方法论
+#### 评估方法论
 
 * **数据集的选择**：如[Belle Paper](https://github.com/LianjiaTech/BELLE/blob/main/docs/Towards%20Better%20Instruction%20Following%20Language%20Models%20for%20Chinese.pdf)中论述，评估集的不同类型分布对于评估结论影响巨大。如田忌赛马，以己之长攻人之短，很容易占优势。因此我们选择了英文chatbot模型研究工作中比较普遍公认的[Vicuna benchmark](https://lmsys.org/blog/2023-03-30-vicuna/)。为了评测中文，我们使用GPT4对于问题做了翻译。翻译代码和数据集如下：。
 * **评估方法**: 为了平衡成本，我们主要采用GPT4进行评估。如[QLoRA](https://arxiv.org/abs/2305.14314) 论证，单纯GPT4打分进行模型的对比随机波动性较大。这与我们的观察一致。因此采用了[QLoRA](https://arxiv.org/abs/2305.14314) 推荐的，现在比较普遍采用的Elo Rating tournament评测方法。
