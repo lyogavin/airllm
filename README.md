@@ -42,7 +42,7 @@ Anima模型基于QLoRA开源的[33B guanaco](https://huggingface.co/timdettmers/
 使用[Chinese-Vicuna](https://github.com/Facico/Chinese-Vicuna)项目开放的训练数据集[guanaco_belle_merge_v1.0](https://huggingface.co/datasets/Chinese-Vicuna/guanaco_belle_merge_v1.0)进行finetune训练。
 
 * **思考逻辑**：按照[QLoRA](https://arxiv.org/abs/2305.14314) Appendix B.4和Table 9中的Grid Search的结论：对于QLoRA finetune，training sample量不一定越大越好。10000个steps是一个ROI比较优的size。因此我们希望选择一个不小于10000个steps的数据集。[Belle 10M](https://github.com/LianjiaTech/BELLE/blob/main/data/10M)数据集似乎太大了，不确定数据质量如何。时间有限，先选择guanaco_belle_merge_v1.0。后边会进一步更系统性的测试更多的数据集和数据质量筛选的效果。
-* **感谢**：Chinese-Vicuna项目、Belle项目、GuanacoDataset的贡献。
+* **感谢**：[Chinese-Vicuna项目](https://github.com/Facico/Chinese-Vicuna)、[Belle项目](https://github.com/LianjiaTech/BELLE)、[GuanacoDataset](https://huggingface.co/datasets/JosephusCheung/GuanacoDataset)的贡献。
 
 #### 超参选择
 
