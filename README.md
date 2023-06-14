@@ -192,7 +192,7 @@ print(tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_to
 
 ## ✍️Who We Are?
 
-此工作来自于[艾写科技](https://aicompose.cn/about)<img src="https://static.aicompose.cn/static/logo/aiwrite_logo.png?t=1674771897"  width="99"/>。我们团队来自于硅谷，有多年中、美大厂的一线AI工作经验。
+此工作来自于[艾写科技](https://aicompose.cn/about)<img src="https://static.aicompose.cn/static/logo/aiwrite_logo.png"  width="99"/>。我们团队来自于硅谷，有多年中、美大厂的一线AI工作经验。
 
 我们致力于通过最新的AGI，LLM技术为内容创作提供下一代的内容创作工具。
 
