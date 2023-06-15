@@ -57,7 +57,7 @@ For cost considerations, we mostly chose not to do too much grid search, assumin
 
 #### How to reproduce our training
 
-Anima 33B model could be reproduced fully with the following steps：
+Anima 33B model could be reproduced fully with the following steps(tested on single GPU environment of 1x80GB H100, or multi-GPU of 2xA100 40GB)：
 
 ```bash
 # 1. install dependencies
@@ -66,7 +66,10 @@ pip install -r requirements.txt
 cd training
 ./run_Amina_training.sh
 ```
+#### Multi-GPU training
+Bause of Hugging Face Accelerate，multi-GPU training is supported out-of-box.
 
+We tested 2xA100 40GB, the above script can work directlly seemlessly.
 
 ## 📊Evaluations
 
