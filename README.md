@@ -56,15 +56,26 @@ Anima模型基于QLoRA开源的[33B guanaco](https://huggingface.co/timdettmers/
 
 #### 如何训练
 
-使用以下步骤可以重现Anima 33B模型（单卡80GB H100或双卡 40GB A100均测试过可运行）：
+1. 重现Anima的模型训练过程：使用以下步骤可以重现Anima 33B模型（单卡80GB H100或双卡 40GB A100均测试过可运行）：
 
-```bash
-# 1. install dependencies
-pip install -r requirements.txt
-# 2. 
-cd training
-./run_Amina_training.sh
-```
+	```bash
+	# 1. install dependencies
+	pip install -r requirements.txt
+	# 2. 
+	cd training
+	./run_Amina_training.sh
+	```
+
+2. 基于Anima finetune训练其他model：
+
+	```bash
+	# 1. install dependencies
+	pip install -r requirements.txt
+	# 2. 
+	cd training
+	./run_finetune_raining_based_on_Anima.sh
+	```
+	注：可以修改run_finetune_raining_based_on_Anima.sh中的--dataset和--dataset_format参数使用其他训练数据dataset。
 
 #### 多卡训练
 由于使用Hugging Face Accelerate，天然支持多卡训练。

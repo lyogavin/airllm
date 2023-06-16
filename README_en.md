@@ -57,15 +57,27 @@ For cost considerations, we mostly chose not to do too much grid search, assumin
 
 #### How to reproduce our training
 
-Anima 33B model could be reproduced fully with the following steps(tested on single GPU environment of 1x80GB H100, or multi-GPU of 2xA100 40GB)：
+1. Reproducing the Anima model's training: Anima 33B model could be reproduced fully with the following steps(tested on single GPU environment of 1x80GB H100, or multi-GPU of 2xA100 40GB)：
+	
+	```bash
+	# 1. install dependencies
+	pip install -r requirements.txt
+	# 2. 
+	cd training
+	./run_Amina_training.sh
+	```
 
-```bash
-# 1. install dependencies
-pip install -r requirements.txt
-# 2. 
-cd training
-./run_Amina_training.sh
-```
+2. Finetuen train other models based on Anima：
+
+	```bash
+	# 1. install dependencies
+	pip install -r requirements.txt
+	# 2. 
+	cd training
+	./run_finetune_raining_based_on_Anima.sh
+	```
+	Note: please modify the --dataset and --dataset_format arguments in run_finetune_raining_based_on_Anima.sh accordinglly to point to your dataset。
+
 #### Multi-GPU training
 Bause of Hugging Face Accelerate，multi-GPU training is supported out-of-box.
 
