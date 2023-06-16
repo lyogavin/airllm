@@ -25,9 +25,9 @@ Therefore, we believe that QLoRA's work is very important, so important that it 
 
 ## 🤗Anima's Huggingface Repo
 
-[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B) [lyogavin/Anima33B](https://huggingface.co/lyogavin/Anima33B)
+[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B) [lyogavin/Anima33B](https://huggingface.co/lyogavin/Anima33B) (Peft adapter model only)
 
-[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B-merged) [lyogavin/Anima33B-merged](https://huggingface.co/lyogavin/Anima33B)
+[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B-merged) [lyogavin/Anima33B-merged](https://huggingface.co/lyogavin/Anima33B) (Merged model as a standalone model)
 
 ## 🚀Training
 
