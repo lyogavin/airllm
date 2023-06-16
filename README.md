@@ -206,6 +206,14 @@ print(tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_to
 </details>
 <br/>
 
+# 参与贡献
+
+欢迎大家参与贡献本项目 🙏
+
+**如果你喜欢我们的项目，请帮忙点个⭐吧!**
+
+[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://bmc.link/lyogavinQ)
+
 ## ✍️Who We Are?
 
 此工作来自于[艾写科技](https://aicompose.cn/about)<img src="https://static.aicompose.cn/static/logo/aiwrite_logo.png"  width="99"/>。我们团队来自于硅谷，有多年中、美大厂的一线AI工作经验。
@@ -217,6 +225,8 @@ print(tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_to
 单纯的为内容创作提供“写”文案的工具已经远远不够。内容创作者需要的不是“写”，而是“写爆款”，是要结合“爆款”的趋势，结合对于用户内容兴趣和口味变化的敏锐洞察，为内容创作提供能高效产出爆款的AI。
 
 我们坚持积累大量的中文全网社交媒体数据，积累了大量实时的对于爆款趋势的变化数据。通过结合爆款数据和最近的LLM AI技术，为内容创作者提供算法分发时代真正有效的竞争优势。
+
+
 
 
 

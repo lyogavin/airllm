@@ -212,6 +212,14 @@ print(tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_to
 </details>
 <br/>
 
+# Contribution
+
+Contributors are welcomed 🙏
+
+**Please leave a star ⭐ if you like our work!**
+
+[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://bmc.link/lyogavinQ)
+
 ## ✍️Who We Are?
 
 This work comes from [Aiwrite Technology](https://aicompose.cn/about) <img src="https://static.aicompose.cn/static/logo/aiwrite_logo.png" width="99"/>. Our team is from Silicon Valley and has many years of front-line AI work experience in Chinese and American companies.
