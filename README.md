@@ -29,6 +29,8 @@ AI Community从来都是非常开放的，AI发展到今天，离不开很多以
 
 [![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B) [lyogavin/Anima33B](https://huggingface.co/lyogavin/Anima33B)
 
+[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B-merged) [lyogavin/Anima33B-merged](https://huggingface.co/lyogavin/Anima33B)
+
 ## 🚀模型训练
 
 #### Backbone模型选择

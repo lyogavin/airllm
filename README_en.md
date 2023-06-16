@@ -27,6 +27,8 @@ Therefore, we believe that QLoRA's work is very important, so important that it 
 
 [![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B) [lyogavin/Anima33B](https://huggingface.co/lyogavin/Anima33B)
 
+[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B-merged) [lyogavin/Anima33B-merged](https://huggingface.co/lyogavin/Anima33B)
+
 ## 🚀Training
 
 #### Backbone Model
