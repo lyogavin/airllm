@@ -83,7 +83,7 @@ Anima模型基于QLoRA开源的[33B guanaco](https://huggingface.co/timdettmers/
 由于使用Hugging Face Accelerate，天然支持多卡训练。
 我们测试过双卡40GB的A100，可以直接运行。
 
-## 📊验证评估
+## 📊验证评估🏆
 
 #### Elo rating tournament结论
 

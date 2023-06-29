@@ -85,7 +85,7 @@ Bause of Hugging Face Accelerate，multi-GPU training is supported out-of-box.
 
 We tested 2xA100 40GB, the above script can work directlly seemlessly.
 
-## 📊Evaluations
+## 📊Evaluations🏆
 
 #### Elo rating tournament
 

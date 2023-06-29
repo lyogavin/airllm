@@ -8,7 +8,7 @@ echo "RUN ID: $run_ts"
 echo "START TIME: $(date)"
 
 
-ROOT_DIR_BASE=/home/ubuntu/cloudfs/saved_models/qlora_cn
+ROOT_DIR_BASE=./Anima_run
 OUTPUT_PATH=$ROOT_DIR_BASE/output_$run_id
 
 mkdir -p $OUTPUT_PATH
