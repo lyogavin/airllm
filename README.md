@@ -206,6 +206,17 @@ print(tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_to
 </details>
 <br/>
 
+
+## 基于QLoRA的DPO RLHF实现
+
+Anima模型又开源了基于QLoRA的最新的DPO技术。
+
+DPO是最新的最高效的RLHF训练方法。RLHF一直是生成式AI训练的老大难问题，也被认为是OpenAI的压箱底独家秘笈。DPO技术改变了这一切，让RLHF彻底傻瓜化！
+
+我们开源了RLHF的低成本QLoRA的实现，一台GPU机器就可以训练33B模型的DPO！
+
+具体详见：[这里](https://github.com/lyogavin/Anima/tree/main/rlhf)。
+
 # 参与贡献
 
 欢迎大家参与贡献本项目 🙏
