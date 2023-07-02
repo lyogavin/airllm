@@ -110,7 +110,7 @@ LLM模型最重要的还是logical reasoning的能力和encode knowledge的能�
 
 Anima模型只通过10000 steps的训练，并没有深度优化训练数据的质量，就已经达到了最优的中文模型的效果。
 
-# 🎉如何Inferrence
+# 🎉如何Inference
 
 首先保证依赖都已经安装：
 
