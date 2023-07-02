@@ -31,24 +31,37 @@ RLHF和PPO的训练难度比较高。特别是对于数据要求很高，很不�
 
 最近Standford和CZ Biohub联合论文中提出了[DPO（Direct Preference Optimization）](https://arxiv.org/abs/2305.18290)技术。可以说是一个屌丝平替版的RLHF PPO。不但大幅降低了RLHF的难度，非常容易训练，而且按照论文中的评测对比，训练性能也超越了PPO技术！
 
+**DPO的核心原理是**：PPO训练难度核心是因为需要通过reward model来表达偏好，进行强化学习。如果能够省略掉reward model，问题就能瞬间变简单很多！
+
+为了不再依赖于reward model进行强化学习，他进行了一系列的数学变换，直接推导出了基于Policy Language Model的标注偏好的概率表达形式，从而可以直接求解一个Language Model的最大似然估计。不再需要复杂繁琐的reward model和强化学习。
+
+
 DPO最的贡献之处有以下几点：
 
 1. DPO去掉了reward model。原来PPO训练需要额外的两个辅助模型reward model和SFT model。现在只需要训练一个SFT model。这根本上克服了训练中波动过高带来的不稳定的来源，大大提升了训练的稳定性和成功率，降低了对于标注数据质量的要求。
 
 1. 由于去除掉了reward model，训练速度也大大提升了，而且大大降低了对于宝贵的GPU内存的需求。
 
-1. 强烈建议读一读DPO论文。论文炫技般的给出了华丽的数学论证，证明了DPO为什么相比PPO更有效，更稳定！
+1. 可能更为重要的是，训练和迭代过程中少了一个reward model，大大降低了对于宝贵的GPU内存的需求。想想一台80GB H100的售价，降低GPU内存意味着什么就不容多说了吧？懂得都懂😂！
 
 
 # 开源QLoRA版本的低成本DPO实现
 
 我们开源了基于QLoRA的DPO训练方法的实现。
 
+DPO的核心是以下的DPO Loss：
+![dpo loss](https://github.com/lyogavin/Anima/blob/main/rlhf/DPO_loss.png?raw=true)
+
+这个Loss使得我们可以直接优化求解preference的最大似然解。
+
+我们基于QLoRA框架，实现了这个DPO loss。
+
 ### 如何使用Anima QLoRA DPO训练？
 
-**准备数据：**我们采用类似于[hh-rlhf数据集](https://huggingface.co/datasets/Anthropic/hh-rlhf)的格式：训练数据的格式为每一条数据有两个key：chosen和rejected。用于对比针对同一个prompt，什么是标注认为好的输出和不好的输出。可以修改--dataset参数指向本地数据集或者huggingface数据集。
+- **准备数据：**我们采用类似于[hh-rlhf数据集](https://huggingface.co/datasets/Anthropic/hh-rlhf)的格式：训练数据的格式为每一条数据有两个key：chosen和rejected。用于对比针对同一个prompt，什么是标注认为好的输出和不好的输出。可以修改--dataset参数指向本地数据集或者huggingface数据集。
+- **训练Supervised Fine Tune(SFT) model**：这个SFT model，其实就是针对标注样本数据集训练的一个普通的LLM，可以参考Anima的方法进行训练。这个模型会作为DPO训练的初始值，训练过程也会参考这个模型，防止偏差过大。
 
-**训练模型：**
+- **训练模型：**
 
 ```bash
 # 1. install dependencies
@@ -57,6 +70,12 @@ pip install -r requirements.txt
 cd rlhf
 ./run_dpo_training.sh
 ```
+
+run_dpo_training.sh 中的参数大部分和Anima的训练参数一致。有几个额外的DPO的参数：
+
+- **dataset**：标注偏好数据集
+- **reference_model**：这个应该指向上一个步骤中训练的SFT model
+- **beta**：beta是DPO Loss中用于平衡KL散度的超参，越小对于​SFT model的参考越弱。beta为零时相当于忽略​SFT model。beta一般取值0.1-0.5。
 
 # 开源Anima 33B的DPO alignment版本模型
 
