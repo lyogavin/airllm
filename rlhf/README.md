@@ -46,7 +46,7 @@ DPO最的贡献之处有以下几点：
 
 ### 如何使用Anima QLoRA DPO训练？
 
-**准备数据：**我们采用类似于https://huggingface.co/datasets/Anthropic/hh-rlhf数据集的格式：训练数据的格式为每一条数据有两个key：chosen和rejected。用于对比针对同一个prompt，什么是标注认为好的输出和不好的输出。可以修改--dataset参数指向本地数据集或者huggingface数据集。
+**准备数据：**我们采用类似于[hh-rlhf数据集](https://huggingface.co/datasets/Anthropic/hh-rlhf)的格式：训练数据的格式为每一条数据有两个key：chosen和rejected。用于对比针对同一个prompt，什么是标注认为好的输出和不好的输出。可以修改--dataset参数指向本地数据集或者huggingface数据集。
 
 **训练模型：**
 
