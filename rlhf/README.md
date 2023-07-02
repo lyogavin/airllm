@@ -79,7 +79,7 @@ run_dpo_training.sh 中的参数大部分和Anima的训练参数一致。有几�
 
 # 开源Anima 33B的DPO alignment版本模型
 
-我们针对我们开源的Anima 33B训练了DPO alignment的版本。我们使用了[Belle开源的1k评测集](https://github.com/LianjiaTech/BELLE)。(感谢Belle的开源贡献！)这个评测集针对每一个问题都给出了标准答案，可以用来作为高质量的正向样本，而原来模型的输出就作为负向样本。这样训练会鼓励模型尽量输出接近于Belle评测集中的正确答案的回答方式。
+我们针对我们开源的Anima 33B训练了DPO alignment的版本。我们使用了[Belle开源的1k评测集](https://github.com/LianjiaTech/BELLE)。(感谢Belle的开源贡献！)这个评测集针对每一个问题都给出了高质量的标准答案，可以用来作为高质量的正向样本，而原来模型的输出就作为负向样本。这样训练会鼓励模型尽量输出接近于Belle评测集中的正确答案的回答方式。
 
 训练采用了一台80G的H100，一共100个step，用时5小时，训练过程丝滑稳定：
 
