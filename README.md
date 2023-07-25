@@ -217,6 +217,57 @@ DPO是最新的最高效的RLHF训练方法。RLHF一直是生成式AI训练的�
 
 具体详见：[这里](https://github.com/lyogavin/Anima/tree/main/rlhf)。
 
+
+# Troubleshooting
+
+### 1. cuda lib 路径问题
+
+如果training或者inference碰到以下的问题：可能是cuda lib的路径问题：
+
+
+```bash
+libbitsandbytes_cpu.so: undefined symbol: cquantize_blockwise_fp16_nf4
+```
+
+```bash
+ERROR: python: undefined symbol: cudaRuntimeGetVersion
+```
+
+```bash
+CUDA SETUP: libcudart.so path is None
+```
+解决方法：
+把以下代码加入到 in .bashrc
+
+```bash
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+然后：
+
+```bash
+source ~/.bashrc
+```
+
+可以参考：
+https://github.com/TimDettmers/bitsandbytes/issues/85
+
+### 2. cuda 问题
+如果碰到以下问题：
+
+```bash
+RuntimeError: "addmm_impl_cpu_" not implemented for 'Half'
+```
+可能是cuda驱动或者toolkit安装问题，请查看cuda是否安装成功。可以运行一下命令查看是不是cuda安装成功：
+
+```bash
+nvidia-smi
+```
+
+可以参考：
+https://stackoverflow.com/q/73530569/21230266
+
+
 # 参与贡献
 
 欢迎大家参与贡献本项目 🙏
