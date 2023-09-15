@@ -103,6 +103,8 @@ Lmsys的Longchat中提出了一种构造长输入的评测方法。他们构造�
 | longchat 32k 1.5             | 0.05 | 
 | Anima 100K   | 0.5  | 
 
+评测数据集的生成代码可以在[github repo](https://github.com/lyogavin/Anima/blob/main/anima_100k/gen_longchat_topics_retrieval_eval_dataset_extended.ipynb)中找到。
+
 #### 2. longchat number retrieval
 
 第二个评测集来自于Longchat中另一种评测方法。构造了很多Key Value对，每对数据有一个key和一个数值。要求模型找到指定的key对应的value数值。
@@ -117,6 +119,9 @@ Lmsys的Longchat中提出了一种构造长输入的评测方法。他们构造�
 | together llama2 32k        | 0.2 | 
 | longchat 32k 1.5             | 0.05 | 
 | Anima 100K   | 0.45 | 
+
+评测数据集的生成代码可以在[github repo](https://github.com/lyogavin/Anima/blob/main/anima_100k/gen_longchat_lines_retrieval_eval_dataset.ipynb)中找到。
+
 
 #### 3. Narrative QA in zeroscore
 
