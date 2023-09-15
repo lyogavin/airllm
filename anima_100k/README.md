@@ -31,7 +31,7 @@ RAG的方法本质上并没有把今天最高智能的大语言模型用到这�
 
 ## 100K难在哪？
 
-100K的训练和推理，最大的难点是内存消耗。Transformer训练过程的很多内存的大小很多是正比于输入序列长度的二次方的，当输入长度达到100K的时候，就是  !有的是正比于输入长度乘以总的token数量（对于llama模型来讲是100K * 32000也很大）。
+100K的训练和推理，最大的难点是内存消耗。Transformer训练过程的很多内存的大小很多是正比于输入序列长度的二次方的，当输入长度达到100K的时候，就是 $10^{10}$ !有的是正比于输入长度乘以总的token数量（对于llama模型来讲是100K * 32000也很大）。
 
 比如，原始HF中Llama2的实现代码中的330行的代码：
 
@@ -40,7 +40,7 @@ attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqr
 ```
 运行这一行代码时，需要分配的内存量为：
 
-$batch\_size \times num\_heads \times sequence\_len^2 \times float\_size = 32\times100k^2\times2 = 596.04GB$
+$`batch{\_}size \times num\_heads \times sequence\_len^2 \times float\_size = 32\times100k^2\times2 = 596.04GB`$
 
 **这一行代码就需要分配600GB的显存。一行代码干出8块A100**😓😓。
 
@@ -51,11 +51,11 @@ $batch\_size \times num\_heads \times sequence\_len^2 \times float\_size = 32\ti
 
 为了优化模型训练100K序列长度时的内存消耗，我们组合使用了各种最新的科技与狠活：
 
-[Flashattention2](https://github.com/Dao-AILab/flash-attention) 通过cuda kernel把长序列分块计算，可以把上述的$O(seq\_len^2)$变成$O(seq\_len*block\_c)$.
+[Flashattention2](https://github.com/Dao-AILab/flash-attention) 通过cuda kernel把长序列分块计算，可以把上述的$`O(seq\_len^2)`$变成$`O(seq\_len*block\_c)`$.
 
 所以**596GB的内存可以减少到782MB**：
 
-$batch\_size \times num\_heads \times sequence\_len \times block_c \times float\_size = 32\times100k \times 128\times2 = 782MB$
+$`batch\_size \times num\_heads \times sequence\_len \times block_c \times float\_size = 32\times100k \times 128\times2 = 782MB`$
 
 [XEntropy](https://github.com/NVIDIA/apex/tree/master/apex/contrib/xentropy)可以把seq_len * 32000的ogit的内存分配变成inplace，从而节省一半的内存。
 
@@ -141,7 +141,7 @@ Lmsys的Longchat中提出了一种构造长输入的评测方法。他们构造�
 ## 🤗Huggingface模型开源
 
 开源模型可以在huggingface中找到
-[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima-7B-100K) [lyogavin/Anima33B](https://huggingface.co/lyogavin/Anima-7B-100K) 
+[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima-7B-100K) [lyogavin/Anima-7B-100K](https://huggingface.co/lyogavin/Anima-7B-100K) 
 
 这一次仅开源了英文版的模型。中文模型暂未公开开放，现在接受申请，可以添加"AI统治世界计划"的公众号，后台输入“100K”申请访问。
 
@@ -160,13 +160,16 @@ _谁是真正的杀死Kim的凶手？_
 
 _文中Kim的男友到底是谁？_
 
+<img src="[https://i.imgur.com/ZWnhY9T.png](https://github.com/lyogavin/Anima/blob/main/assets/gpt4_q1.png?raw=true)" height="250">
+
+
 为了构造悬念，侦探小说常常需要给出各种错误的讯息误导读者，然后结尾再上演好几次的大反转。模型必须能完整的理解整本书的内容，才能不被误导。找到真正的答案。
 
 这本书的长度略超过了100k，我们随机切掉了中间的一部分内容。然后剩下接近100k的内容全部输入给Anima 100K。
 
 看看Anima 100K能否看懂这本书找到谁是凶手：
 
-![anima question 1](https://github.com/lyogavin/Anima/blob/main/assets/anima_q1.png?raw=true)
+![anima question 1](https://github.com/lyogavin/Anima/blob/main/assets/8millionwaystodie.jpeg?raw=true)
 
 答对了！👍
 
