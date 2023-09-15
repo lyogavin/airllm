@@ -103,6 +103,8 @@ Lmsys的Longchat中提出了一种构造长输入的评测方法。他们构造�
 | longchat 32k 1.5             | 0.05 | 
 | Anima 100K   | 0.5  | 
 
+Claude 100k大部分可以正确找到topic，但是会有一些没有按照prompt原文输出，做了一定的改写，因此​准确率为0.9。
+
 评测数据集的生成代码可以在[github repo](https://github.com/lyogavin/Anima/blob/main/anima_100k/gen_longchat_topics_retrieval_eval_dataset_extended.ipynb)中找到。
 
 #### 2. longchat number retrieval
