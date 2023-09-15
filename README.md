@@ -66,6 +66,23 @@ DPO是最新的最高效的RLHF训练方法。RLHF一直是生成式AI训练的�
 
 
 
+## 微信公众号
+
+扫码：
+
+![group](https://github.com/lyogavin/Anima/blob/main/wechat_pub_account.jpg?raw=true)
+
+
+## 微信群
+
+扫码进群：
+
+![group](https://github.com/lyogavin/Anima/blob/main/wechat_group.png?raw=true)
+
+
+
+
+
 
 ## 参与贡献
 
