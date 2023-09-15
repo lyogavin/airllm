@@ -782,7 +782,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         only_last_logit: Optional[bool] = None,
-        xentropy: Optional[bool] = None,
+        xentropy: Optional[bool] = True,
         is_padded_inputs: Optional[bool] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""

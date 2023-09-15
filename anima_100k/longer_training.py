@@ -325,6 +325,7 @@ class SampleGenerateCallback(transformers.TrainerCallback):
                     input_ids=input_ids,
                     max_new_tokens=15,
                     do_sample = False,
+                    only_last_logit=True,  # to save memory
                 )
 
 
