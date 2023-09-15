@@ -150,7 +150,7 @@ Claude 100k大部分可以正确找到topic，但是会有一些没有按照prom
 开源模型可以在huggingface中找到
 [![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima-7B-100K) [lyogavin/Anima-7B-100K](https://huggingface.co/lyogavin/Anima-7B-100K) 
 
-这一次仅开源了英文版的模型。中文模型暂未公开开放，现在接受申请，可以添加"AI统治世界计划"的公众号，后台输入“100K”申请访问。
+这一次仅开源了英文版的模型。中文模型暂未公开开放，现在接受申请，可以添加"AI统治世界计划"的公众号，后台输入“100k”申请访问。
 
 ## 如何训练/推理？
 
