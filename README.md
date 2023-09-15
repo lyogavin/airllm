@@ -4,7 +4,7 @@
 
 第一个开源的基于QLoRA的33B中文大语言模型，支持了基于DPO的对齐训练。
 
-我们也开源了第一个100K输入窗口的开源模型Anima100K，基于Llama2，可商用。
+我们也开源了100K输入窗口的开源模型Anima100K，基于Llama2，可商用。
 
 *Read this in [English](README_en.md).*
 
@@ -13,7 +13,8 @@
 <a href="https://github.com/lyogavin/Anima/stargazers">![GitHub Repo stars](https://img.shields.io/github/stars/lyogavin/Anima?style=social)</a>
 [![Code License](https://img.shields.io/badge/Code%20License-Apache_2.0-green.svg)](https://github.com/LianjiaTech/BELLE/blob/main/LICENSE)
 [![Generic badge](https://img.shields.io/badge/wechat-Anima-brightgreen?logo=wechat)](https://static.aicompose.cn/static/wecom_barcode.png?t=1671918938)
-[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B)
+[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B-merged)
+[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima-7B-100K)
 </div>
 
 ## 🔄 更新
@@ -55,7 +56,7 @@ DPO是最新的最高效的RLHF训练方法。RLHF一直是生成式AI训练的�
 
 当输入长度支持100k，你甚至可以把整个知识库都放入Prompt交给模型。或者可以把一本书直接放到Prompt里边。再也不用各种费劲的向量化，文本分割。。。。
 
-我们堆了各种最新的猛料：[XEntropy](https://github.com/NVIDIA/apex/tree/master/apex/contrib/xentropy)，[Paged 8bit Adamw](https://github.com/TimDettmers/bitsandbytes), [LORA] (https://github.com/huggingface/peft), [Flashattention2](https://github.com/Dao-AILab/flash-attention)，并且专门针对长输入对于training和Inference代码都做了修改定制，使得单卡100G就可以训练100k窗口。单卡40G就可以进行推理。
+我们堆了各种最新的猛料：[XEntropy](https://github.com/NVIDIA/apex/tree/master/apex/contrib/xentropy)，[Paged 8bit Adamw](https://github.com/TimDettmers/bitsandbytes), [LORA](https://github.com/huggingface/peft), [Flashattention2](https://github.com/Dao-AILab/flash-attention)，并且专门针对长输入对于training和Inference代码都做了修改定制，使得单卡100G就可以训练100k窗口。单卡40G就可以进行推理。
 
 训练数据上，从几十种公开数据集中精选了专门针对长输入的30k～100k长度的长文本训练数据，专门针对100K输入对模型进行了训练。
 
