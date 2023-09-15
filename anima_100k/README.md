@@ -184,7 +184,8 @@ inputs['attention_mask'] = inputs['attention_mask'].cuda()
 
 # Generate
 generate_ids = model.generate(**inputs, max_new_tokens=30,
-                       only_last_logit=True,
+                       only_last_logit=True, # to save memory
+                       use_cache=False, # when run into OOM, enable this can save memory
                        xentropy=True)
 output = tokenizer.batch_decode(generate_ids, 
                                 skip_special_tokens=True,
