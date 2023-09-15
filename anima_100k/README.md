@@ -160,7 +160,7 @@ _谁是真正的杀死Kim的凶手？_
 
 _文中Kim的男友到底是谁？_
 
-<img src="[https://i.imgur.com/ZWnhY9T.png](https://github.com/lyogavin/Anima/blob/main/assets/gpt4_q1.png?raw=true)" height="250">
+<img src="https://github.com/lyogavin/Anima/blob/main/assets/8millionwaystodie.jpeg?raw=true" height="250">
 
 
 为了构造悬念，侦探小说常常需要给出各种错误的讯息误导读者，然后结尾再上演好几次的大反转。模型必须能完整的理解整本书的内容，才能不被误导。找到真正的答案。
@@ -169,7 +169,7 @@ _文中Kim的男友到底是谁？_
 
 看看Anima 100K能否看懂这本书找到谁是凶手：
 
-![anima question 1](https://github.com/lyogavin/Anima/blob/main/assets/8millionwaystodie.jpeg?raw=true)
+![anima question 1](https://github.com/lyogavin/Anima/blob/main/assets/gpt4_q1.png?raw=true)
 
 答对了！👍
 
