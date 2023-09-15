@@ -145,7 +145,58 @@ Lmsys的Longchat中提出了一种构造长输入的评测方法。他们构造�
 
 这一次仅开源了英文版的模型。中文模型暂未公开开放，现在接受申请，可以添加"AI统治世界计划"的公众号，后台输入“100K”申请访问。
 
+## 如何训练/推理？
 
+#### 安装依赖
+
+```bash
+# Please update the path of `CUDA_HOME`
+export CUDA_HOME=/usr/local/cuda-11.8
+pip install transformers==4.31.0
+pip install sentencepiece
+pip install ninja
+pip install flash-attn --no-build-isolation
+pip install git+https://github.com/HazyResearch/flash-attention.git#subdirectory=csrc/rotary
+pip install git+https://github.com/HazyResearch/flash-attention.git#subdirectory=csrc/xentropy
+```
+
+#### 推理
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+
+base_model = "lyogavin/Anima-7B-100K"
+tokenizer = AutoTokenizer.from_pretrained(base_model)
+model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            torch_dtype=torch.float16,
+            trust_remote_code=True,
+            device_map="auto", 
+        )
+model.eval()
+
+prompt = "中国的首都是哪里？"
+inputs = tokenizer(prompt, return_tensors="pt")
+
+inputs['input_ids'] = inputs['input_ids'].cuda()
+inputs['attention_mask'] = inputs['attention_mask'].cuda()
+
+# Generate
+generate_ids = model.generate(**inputs, max_new_tokens=30,
+                       only_last_logit=True,
+                       xentropy=True)
+output = tokenizer.batch_decode(generate_ids, 
+                                skip_special_tokens=True,
+                                clean_up_tokenization_spaces=False)[0]
+
+```
+
+#### 训练
+
+```bash
+./run_longer_training.sh
+```
 
 
 ## 谁是凶手？
