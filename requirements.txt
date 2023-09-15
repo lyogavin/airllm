@@ -1,6 +1,6 @@
 bitsandbytes==0.39.0
 transformers @ git+https://github.com/huggingface/transformers.git
-peft @ git+https://github.com/huggingface/peft.git
+peft @ git+https://github.com/huggingface/peft.git@v0.3.0
 accelerate @ git+https://github.com/huggingface/accelerate.git@v0.20.3
 einops==0.6.1
 evaluate==0.4.0
