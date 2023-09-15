@@ -169,7 +169,7 @@ _文中Kim的男友到底是谁？_
 
 看看Anima 100K能否看懂这本书找到谁是凶手：
 
-![anima question 1](https://github.com/lyogavin/Anima/blob/main/assets/gpt4_q1.png?raw=true)
+![anima question 1](https://github.com/lyogavin/Anima/blob/main/assets/anima_q1.png?raw=true)
 
 答对了！👍
 
