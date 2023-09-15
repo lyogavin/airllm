@@ -158,6 +158,8 @@ pip install ninja
 pip install flash-attn --no-build-isolation
 pip install git+https://github.com/HazyResearch/flash-attention.git#subdirectory=csrc/rotary
 pip install git+https://github.com/HazyResearch/flash-attention.git#subdirectory=csrc/xentropy
+pip install accelerate
+pip install bitsandbytes
 ```
 
 #### 推理
