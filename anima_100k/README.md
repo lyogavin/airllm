@@ -167,6 +167,9 @@ pip install git+https://github.com/HazyResearch/flash-attention.git#subdirectory
 pip install git+https://github.com/HazyResearch/flash-attention.git#subdirectory=csrc/xentropy
 pip install accelerate
 pip install bitsandbytes
+pip install evaluate
+pip install git+https://github.com/huggingface/peft.git@v0.4.0
+pip install wandb
 ```
 
 #### 推理
@@ -195,7 +198,7 @@ inputs['attention_mask'] = inputs['attention_mask'].cuda()
 generate_ids = model.generate(**inputs, max_new_tokens=30,
                        only_last_logit=True, # to save memory
                        use_cache=False, # when run into OOM, enable this can save memory
-                       xentropy=True)
+							)
 output = tokenizer.batch_decode(generate_ids, 
                                 skip_special_tokens=True,
                                 clean_up_tokenization_spaces=False)[0]
