@@ -18,7 +18,7 @@ mkdir -p $OUTPUT_PATH
 
 
 python longer_training.py --dataset="DATASET_PATH" \
-    --dataset_format="FORMAT" \
+    --dataset_format="long_data" \
     --learning_rate 0.0001 \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 16 \
