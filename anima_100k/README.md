@@ -57,7 +57,7 @@ $`batch{\_}size \times num\_heads \times sequence\_len^2 \times float\_size = 32
 
 $`batch\_size \times num\_heads \times sequence\_len \times block_c \times float\_size = 32\times100k \times 128\times2 = 782MB`$
 
-[XEntropy](https://github.com/NVIDIA/apex/tree/master/apex/contrib/xentropy)可以把seq_len * 32000的ogit的内存分配变成inplace，从而节省一半的内存。
+[XEntropy](https://github.com/NVIDIA/apex/tree/master/apex/contrib/xentropy)可以把seq_len * 32000的logit的内存分配变成inplace，从而节省一半的内存。
 
 [Paged 8bit Adamw](https://github.com/TimDettmers/bitsandbytes), 可以通过用8 bit block-wise quantization把adam optimizer中的states, Momentum的内存占用从32 bit降到8 bit，降低4倍。
 
