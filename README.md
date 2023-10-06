@@ -77,8 +77,7 @@ DPO是最新的最高效的RLHF训练方法。RLHF一直是生成式AI训练的�
 
 扫码进群：
 
-![group](https://github.com/lyogavin/Anima/blob/main/assets/wechat_group.png?raw=true)
-
+<img src="https://github.com/lyogavin/Anima/blob/main/assets/wechat_group.png?raw=true" alt="group" style="width:260px;"/>
 
 
 
