@@ -20,11 +20,33 @@
 ## 🔄 更新
 
 
+[2023/11/17] 开源AirLLM，单卡4GB显存跑70B大模型，无需量化，无需模型压缩
+
 [2023/09/06] 更新支持100k 上下文的基于Llama2的可商用大模型
 
 [2023/06/29] 更新基于DPO+QLoRA的Human Feedback训练
 
 [2023/06/12] 开源了第一个基于QLoRA的中文33B大语言模型
+
+
+## AirLLM 单卡4GB显存跑70B大模型
+
+AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理。不需要任何损失模型性能的量化和蒸馏，剪枝等模型压缩。
+
+具体详见：[这里](https://github.com/lyogavin/Anima/tree/main/air_llm)。
+
+## 支持100K输入长度的开源大语言模型
+
+
+当输入长度支持100k，你甚至可以把整个知识库都放入Prompt交给模型。或者可以把一本书直接放到Prompt里边。再也不用各种费劲的向量化，文本分割。。。。
+
+我们堆了各种最新的猛料：[XEntropy](https://github.com/NVIDIA/apex/tree/master/apex/contrib/xentropy)，[Paged 8bit Adamw](https://github.com/TimDettmers/bitsandbytes), [LORA](https://github.com/huggingface/peft), [Flashattention2](https://github.com/Dao-AILab/flash-attention)，并且专门针对长输入对于training和Inference代码都做了修改定制，使得单卡100G就可以训练100k窗口。单卡40G就可以进行推理。
+
+训练数据上，从几十种公开数据集中精选了专门针对长输入的30k～100k长度的长文本训练数据，专门针对100K输入对模型进行了训练。
+
+具体详见：[这里](https://github.com/lyogavin/Anima/tree/main/anima_100k)。
+
+[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima-7B-100K) 
 
 
 ## Anima 33B中文
@@ -49,21 +71,6 @@ DPO是最新的最高效的RLHF训练方法。RLHF一直是生成式AI训练的�
 具体详见：[这里](https://github.com/lyogavin/Anima/tree/main/rlhf)。
 
 [![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B-DPO-Belle-1k-merged) 
-
-
-## 支持100K输入长度的开源大语言模型
-
-
-当输入长度支持100k，你甚至可以把整个知识库都放入Prompt交给模型。或者可以把一本书直接放到Prompt里边。再也不用各种费劲的向量化，文本分割。。。。
-
-我们堆了各种最新的猛料：[XEntropy](https://github.com/NVIDIA/apex/tree/master/apex/contrib/xentropy)，[Paged 8bit Adamw](https://github.com/TimDettmers/bitsandbytes), [LORA](https://github.com/huggingface/peft), [Flashattention2](https://github.com/Dao-AILab/flash-attention)，并且专门针对长输入对于training和Inference代码都做了修改定制，使得单卡100G就可以训练100k窗口。单卡40G就可以进行推理。
-
-训练数据上，从几十种公开数据集中精选了专门针对长输入的30k～100k长度的长文本训练数据，专门针对100K输入对模型进行了训练。
-
-具体详见：[这里](https://github.com/lyogavin/Anima/tree/main/anima_100k)。
-
-[![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima-7B-100K) 
-
 
 
 ## 微信公众号
