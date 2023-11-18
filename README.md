@@ -21,7 +21,10 @@ This is the first open source 33B Chinese LLM, we also support DPO alignment tra
 [![Generic badge](https://img.shields.io/badge/wechat-Anima-brightgreen?logo=wechat)](https://static.aicompose.cn/static/wecom_barcode.png?t=1671918938)
 [![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B-merged)
 [![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima-7B-100K)
-[![Discord](https://img.shields.io/discord/1175437549783760896)](https://discord.gg/2xffU5sn)
+[![Discord](https://img.shields.io/discord/1175437549783760896?logo=discord&color=7289da
+)](https://discord.gg/2xffU5sn)
+[![PyPI - AirLLM](https://img.shields.io/pypi/format/airllm?logo=pypi&color=3571a3)
+](https://pypi.org/project/airllm/)
 
 </div>
 
@@ -115,7 +118,8 @@ Find out more [here](https://github.com/lyogavin/Anima/tree/main/rlhf)。
 
 ## Discord
 
-[![Discord](https://img.shields.io/discord/1175437549783760896)](https://discord.gg/2xffU5sn)
+[![Discord](https://img.shields.io/discord/1175437549783760896?logo=discord&color=7289da
+)](https://discord.gg/2xffU5sn)
 
 
 ## Contribution 参与贡献
