@@ -64,3 +64,14 @@ print(output)
 Note: During inference, the original model will first be decomposed and saved layer-wise. Please ensure there is sufficient disk space in the huggingface cache directory.
  
 注意：推理过程会首先将原始模型按层分拆，转存。请保证huggingface cache目录有足够的磁盘空间。
+
+
+## FAQ
+
+### 1. MetadataIncompleteBuffer
+
+safetensors_rust.SafetensorError: Error while deserializing header: MetadataIncompleteBuffer
+
+If you run into this error, most possible cause is you run out of disk space. The process of splitting model is very disk-consuming. See [this](https://huggingface.co/TheBloke/guanaco-65B-GPTQ/discussions/12). You may need to extend your disk space, clear huggingface [.cache](https://huggingface.co/docs/datasets/cache) and rerun. 
+
+如果你碰到这个error，很有可能是空间不足。可以参考一下[这个](https://huggingface.co/TheBloke/guanaco-65B-GPTQ/discussions/12) 可能需要扩大硬盘空间，删除huggingface的[.cache](https://huggingface.co/docs/datasets/cache)，然后重新run。
