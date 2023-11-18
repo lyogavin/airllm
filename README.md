@@ -21,6 +21,8 @@ This is the first open source 33B Chinese LLM, we also support DPO alignment tra
 [![Generic badge](https://img.shields.io/badge/wechat-Anima-brightgreen?logo=wechat)](https://static.aicompose.cn/static/wecom_barcode.png?t=1671918938)
 [![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B-merged)
 [![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima-7B-100K)
+[![Discord](https://img.shields.io/discord/1175437549783760896)](https://img.shields.io/discord/1175437549783760896)
+
 </div>
 
 ## 🔄 更新 Updates
