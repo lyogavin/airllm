@@ -128,11 +128,11 @@ Buy me a coffee please! 欢迎大家参与贡献本项目 🙏
 
 ## ✍️ 艾写科技 & Anima AI LLC
 
-<img src="https://static.aicompose.cn/static/logo/icon_with_shadow.jpg?t=1693667431" alt="aiwrite" style="width:80px;"/> <img src="https://static.aicompose.cn/static/logo/animaai_logo.png?t=1696952962" alt="aiwrite" style="width:140px;"/>
+<img src="https://static.aicompose.cn/static/logo/dabble-icon-recolor_trans_bg.svg?t=1698957644" alt="aiwrite" style="width:60px;padding-bottom:35px"/> <img src="https://static.aicompose.cn/static/logo/animaai_logo.png?t=1696952962" alt="aiwrite" style="width:170px;"/>
 
 This work is from Anima AI LLC and aiwrite.ai.
 
-此工作来自于[艾写科技](https://aicompose.cn/about)， [Anima AI LLC](https://animaai.cloud)。
+此工作来自于[艾写科技](https://aiwrite.ai)， [Anima AI LLC](https://animaai.cloud)。
 
 
 
