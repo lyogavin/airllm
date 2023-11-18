@@ -21,7 +21,7 @@ This is the first open source 33B Chinese LLM, we also support DPO alignment tra
 [![Generic badge](https://img.shields.io/badge/wechat-Anima-brightgreen?logo=wechat)](https://static.aicompose.cn/static/wecom_barcode.png?t=1671918938)
 [![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B-merged)
 [![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima-7B-100K)
-[![Discord](https://img.shields.io/discord/1175437549783760896)](https://img.shields.io/discord/1175437549783760896)
+[![Discord](https://img.shields.io/discord/1175437549783760896)](https://discord.gg/2xffU5sn)
 
 </div>
 
@@ -113,8 +113,9 @@ Find out more [here](https://github.com/lyogavin/Anima/tree/main/rlhf)。
 
 <img src="https://github.com/lyogavin/Anima/blob/main/assets/wechat_group.png?raw=true" alt="group" style="width:260px;"/>
 
+## Discord
 
-
+[![Discord](https://img.shields.io/discord/1175437549783760896)](https://discord.gg/2xffU5sn)
 
 
 ## Contribution 参与贡献
@@ -124,7 +125,6 @@ Buy me a coffee please! 欢迎大家参与贡献本项目 🙏
 **如果你喜欢我们的项目，请帮忙点个⭐吧!**
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://bmc.link/lyogavinQ)
-
 
 
 
