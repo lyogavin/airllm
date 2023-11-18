@@ -130,7 +130,7 @@ Buy me a coffee please! 欢迎大家参与贡献本项目 🙏
 
 <img src="https://static.aicompose.cn/static/logo/dabble-icon-recolor_trans_bg.svg?t=1698957644" alt="aiwrite" style="width:90px;"/> <img src="https://static.aicompose.cn/static/logo/animaai_logo.png?t=1696952962" alt="aiwrite" style="width:170px;"/>
 
-This work is from Anima AI LLC and aiwrite.ai.
+This work is from [Anima AI LLC](https://animaai.cloud) and [aiwrite.ai](https://aiwrite.ai).
 
 此工作来自于[艾写科技](https://aiwrite.ai)， [Anima AI LLC](https://animaai.cloud)。
 
