@@ -25,8 +25,7 @@ This is the first open source 33B Chinese LLM, we also support DPO alignment tra
 )](https://discord.gg/2xffU5sn)
 [![PyPI - AirLLM](https://img.shields.io/pypi/format/airllm?logo=pypi&color=3571a3)
 ](https://pypi.org/project/airllm/)
-[![Website](https://img.shields.io/website?url=https%3A%2F%2Fmedium.com%2F%40lyo.gavin&logo=medium&color=black)
-](https://medium.com/@lyo.gavin)
+[![Website](https://img.shields.io/website?up_message=blog&url=https%3A%2F%2Fmedium.com%2F%40lyo.gavin&logo=medium&color=black)](https://medium.com/@lyo.gavin)
 
 </div>
 
@@ -125,10 +124,9 @@ Find out more [here](https://github.com/lyogavin/Anima/tree/main/rlhf)。
 [![Discord](https://img.shields.io/discord/1175437549783760896?logo=discord&color=7289da
 )](https://discord.gg/2xffU5sn)
 
-### Medium
+### Blog
 
-[![Website](https://img.shields.io/website?url=https%3A%2F%2Fmedium.com%2F%40lyo.gavin&logo=medium&color=black)
-](https://medium.com/@lyo.gavin)
+[![Website](https://img.shields.io/website?up_message=blog&url=https%3A%2F%2Fmedium.com%2F%40lyo.gavin&logo=medium&color=black)](https://medium.com/@lyo.gavin)
 
 
 ## Contribution 参与贡献
