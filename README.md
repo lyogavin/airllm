@@ -25,6 +25,8 @@ This is the first open source 33B Chinese LLM, we also support DPO alignment tra
 )](https://discord.gg/2xffU5sn)
 [![PyPI - AirLLM](https://img.shields.io/pypi/format/airllm?logo=pypi&color=3571a3)
 ](https://pypi.org/project/airllm/)
+[![Website](https://img.shields.io/website?url=https%3A%2F%2Fmedium.com%2F%40lyo.gavin&logo=medium&color=black)
+](https://medium.com/@lyo.gavin)
 
 </div>
 
@@ -103,23 +105,30 @@ Find out more [here](https://github.com/lyogavin/Anima/tree/main/rlhf)。
 [![Generic badge](https://img.shields.io/badge/🤗-Huggingface%20Repo-green.svg)](https://huggingface.co/lyogavin/Anima33B-DPO-Belle-1k-merged) 
 
 
-## Wechat 微信公众号
+## Stay Connected with Us
+
+### Wechat 微信公众号
 
 扫码：
 
 ![group](https://github.com/lyogavin/Anima/blob/main/assets/wechat_pub_account.jpg?raw=true)
 
 
-## Wechat group 微信群
+### Wechat group 微信群
 
 扫码进群：
 
 <img src="https://github.com/lyogavin/Anima/blob/main/assets/wechat_group.png?raw=true" alt="group" style="width:260px;"/>
 
-## Discord
+### Discord
 
 [![Discord](https://img.shields.io/discord/1175437549783760896?logo=discord&color=7289da
 )](https://discord.gg/2xffU5sn)
+
+### Medium
+
+[![Website](https://img.shields.io/website?url=https%3A%2F%2Fmedium.com%2F%40lyo.gavin&logo=medium&color=black)
+](https://medium.com/@lyo.gavin)
 
 
 ## Contribution 参与贡献
