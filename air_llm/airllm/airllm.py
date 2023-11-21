@@ -6,6 +6,7 @@ import ctypes
 import shutil
 from tqdm import tqdm
 from pathlib import Path
+from glob import glob
 
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, AutoModel, GenerationMixin, LlamaForCausalLM, GenerationConfig
@@ -16,10 +17,17 @@ from safetensors.torch import load_file, save_file
 from optimum.bettertransformer import BetterTransformer
 import huggingface_hub
 
+class NotEnoughSpaceException(Exception):
+    pass
+
 # Function to clean RAM & vRAM
 def clean_memory():
     gc.collect()
-    ctypes.CDLL("libc.so.6").malloc_trim(0)
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception as ex:
+        # maybe platform
+        pass
     torch.cuda.empty_cache()
 
 def load_layer(local_path, layer_name):
@@ -27,19 +35,38 @@ def load_layer(local_path, layer_name):
     return layer_state_dict
 
 
-def split_and_save_layers(checkpoint_path, splitted_model_dir_name='splitted_model'):
+def check_space(checkpoint_path, layer_shards_saving_path=None):
+    total_shard_files_size_bytes = 0
+    for model_shard_file in glob(str(checkpoint_path / '*')):
+        total_shard_files_size_bytes += os.path.getsize(model_shard_file)
+
+    total, used, free = shutil.disk_usage(checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path)
+
+    if free < total_shard_files_size_bytes:
+        raise NotEnoughSpaceException(f"Not enough space. Free space under {checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path}:"  \
+                                      f" {free / 1024 / 1024 / 1024:.02f}GB. Model total size: {total_shard_files_size_bytes / 1024 / 1024 / 1024:.02f}GB.")
+
+
+def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitted_model_dir_name='splitted_model'):
     """
     Save the all layers of a model sharded checkpoint using safetensors.
     """
 
     checkpoint_path = Path(checkpoint_path)
 
-    total, used, free = shutil.disk_usage(checkpoint_path)
 
-    Llama2_70B_size = 134720680
+    saving_path = checkpoint_path / splitted_model_dir_name
 
-    if free/1024 < Llama2_70B_size:
-        print(f"WARNING: free space in the saving path {checkpoint_path / splitted_model_dir_name} seems small: {free/1024/1024/1024:02f}GB, please make sure you have enough space to save the splitted model")
+    if layer_shards_saving_path is not None:
+        saving_path = Path(layer_shards_saving_path) / splitted_model_dir_name
+
+    if os.path.exists(saving_path):
+        # already exists, assuming it's saved already, directly return
+        return str(saving_path)
+
+
+
+    check_space(checkpoint_path, layer_shards_saving_path)
 
     with open(checkpoint_path / 'pytorch_model.bin.index.json', 'rb') as f:
         index = json.load(f)['weight_map']
@@ -50,8 +77,10 @@ def split_and_save_layers(checkpoint_path, splitted_model_dir_name='splitted_mod
     n_shards = len(set(index.values()))
     state_dict = {}
 
-    if not os.path.exists(checkpoint_path / splitted_model_dir_name):
-        os.makedirs(checkpoint_path / splitted_model_dir_name)
+
+
+    if not os.path.exists(saving_path):
+        os.makedirs(saving_path)
 
     for layer in tqdm(layers):
 
@@ -67,9 +96,9 @@ def split_and_save_layers(checkpoint_path, splitted_model_dir_name='splitted_mod
         layer_state_dict = dict([(k, v) for k, v in state_dict.items() if k.startswith(layer)])
 
         # Save layer state dict as using safetensors
-        save_file(layer_state_dict, checkpoint_path / splitted_model_dir_name / (layer + 'safetensors'))
+        save_file(layer_state_dict, saving_path / (layer + 'safetensors'))
 
-        print(f"saved as: {checkpoint_path / splitted_model_dir_name / (layer + 'safetensors')}")
+        print(f"saved as: {saving_path / (layer + 'safetensors')}")
 
         # Free memory
         for k in layer_state_dict.keys():
@@ -77,17 +106,31 @@ def split_and_save_layers(checkpoint_path, splitted_model_dir_name='splitted_mod
         del layer_state_dict
         gc.collect()
 
-    return str(checkpoint_path / splitted_model_dir_name)
+    return str(saving_path)
 
-def find_or_create_local_splitted_path(model_local_path_or_repo_id):
-    # try as splitted path first...
-    if os.path.exists(Path(model_local_path_or_repo_id) / 'splitted_model'):
-        return Path(model_local_path_or_repo_id) / 'splitted_model'
+def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards_saving_path=None):
+    """
+    find the model's local cache path, download the cache if not exists, then split and save the model.
 
-    # try local model path
+    Parameters
+    ----------
+    model_local_path_or_repo_id : str
+        model local path or hf repo id
+    layer_shards_saving_path : str, optional
+        optional path to save the splitted model, by default directly under the model local path
+
+    Returns
+    -------
+    model_local_path : str
+        local model path
+    saved_layer_shards_path : str
+        the path saved layer shards
+    """
+
+    # try local model path, if the model exist split and save there
     if os.path.exists(model_local_path_or_repo_id):
         if os.path.exists(Path(model_local_path_or_repo_id) / 'pytorch_model.bin.index.json'):
-            return split_and_save_layers(model_local_path_or_repo_id)
+            return Path(model_local_path_or_repo_id), split_and_save_layers(model_local_path_or_repo_id, layer_shards_saving_path)
         else:
             print(
                 f"Found local directory in {model_local_path_or_repo_id}, but didn't find downloaded model. Try using {model_local_path_or_repo_id} as a HF repo...")
@@ -97,43 +140,45 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id):
     assert os.path.exists(Path(
         hf_cache_path) / 'pytorch_model.bin.index.json'), f"{hf_cache_path}/pytorch_model.bin.index.json should exists."
 
-    if os.path.exists(Path(hf_cache_path) / 'splitted_model'):
-        return Path(hf_cache_path) / 'splitted_model'
-    else:
-        return split_and_save_layers(hf_cache_path)
+    # if splitted_model subdir exists under cache use it, otherwise split and save
+    return Path(hf_cache_path), split_and_save_layers(hf_cache_path, layer_shards_saving_path)
 
 
 
 class AirLLMLlama2(GenerationMixin):
-    def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=torch.float16, max_seq_len=512):
+    def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=torch.float16, max_seq_len=512,
+                 layer_shards_saving_path=None):
         """
         Sharded version of LlamaForCausalLM : the model is splitted into layer shards to reduce GPU memory usage.
         During the forward pass, the inputs are processed layer by layer, and the GPU memory is freed after each layer.
-        To avoid loading the layers multiple times, we could save all the intermediate activations in RAM, but
-        as Kaggle accelerators have more GPU memory than CPU, we simply batch the inputs and keep them on the GPU.
+        To avoid loading the layers multiple times, we could save all the intermediate activations in RAM.
 
         Parameters
         ----------
-        checkpoint_path : str or Path
-            path to the checkpoint
+        model_local_path_or_repo_id : str or Path
+            path to the local model checkpoint or huggingface repo id
         device : str, optional
             device, by default "cuda:0"
         dtype : torch.dtype, optional
             dtype, by default torch.float16
+        max_seq_len : int, optional
+            max seq lenght, by default 512
+        layer_shards_saving_path : str, optional
+            optional path to save layered shards model file, by default just save to the local cache of model, subdir named splitted_model will be saved
         """
 
         # Save parameters
-        self.checkpoint_path = find_or_create_local_splitted_path(model_local_path_or_repo_id)
+        self.model_local_path, self.checkpoint_path = find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards_saving_path)
         self.running_device = device
         self.device = torch.device(self.running_device)
         self.running_dtype = dtype
         self.dtype = self.running_dtype
 
         # Create model
-        self.config = AutoConfig.from_pretrained(self.checkpoint_path.parent)
-        self.generation_config = GenerationConfig.from_pretrained(self.checkpoint_path.parent)
+        self.config = AutoConfig.from_pretrained(self.model_local_path)
+        self.generation_config = GenerationConfig.from_pretrained(self.model_local_path)
         #print(f"using generation_config: {self.generation_config}")
-        self.tokenizer = AutoTokenizer.from_pretrained(self.checkpoint_path.parent)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_local_path)
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "right"
         self.init_model()

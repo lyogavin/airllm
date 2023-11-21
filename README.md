@@ -141,7 +141,8 @@ Buy me a coffee please! 欢迎大家参与贡献本项目 🙏
 
 ## ✍️ 艾写科技 & Anima AI LLC
 
-<img src="https://static.aicompose.cn/static/logo/dabble-icon-recolor_trans_bg.svg?t=1698957644" alt="aiwrite" style="width:90px;"/> <img src="https://static.aicompose.cn/static/logo/animaai_logo.png?t=1696952962" alt="aiwrite" style="width:170px;"/>
+<img src="https://static.aicompose.cn/static/logo/dabble-icon-recolor_trans_bg.svg?t=1698957644" alt="aiwrite" style="width:90px;"/>
+<img src="https://static.aicompose.cn/static/logo/animaai_logo.png?t=1696952962" alt="aiwrite" style="width:170px;"/>
 
 This work is from [Anima AI LLC](https://animaai.cloud) and [aiwrite.ai](https://aiwrite.ai).
 

@@ -26,6 +26,10 @@ Then, initialize AirLLMLlama2, pass in the huggingface repo ID of the model bein
 
 然后，初始化AirLLMLlama2，传入所使用模型的huggingface repo ID，或者本地路径即可类似于普通的transformer模型进行推理。
 
+(*You can can also specify the path to save the splitted layered model through **layer_shards_saving_path** when init AirLLMLlama2.*
+
+*如果需要指定另外的路径来存储分层的模型可以在初始化AirLLMLlama2是传入参数：**layer_shards_saving_path**。*)
+
 ```python
 from airllm import AirLLMLlama2
 
