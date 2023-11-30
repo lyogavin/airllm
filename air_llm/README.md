@@ -69,6 +69,14 @@ Note: During inference, the original model will first be decomposed and saved la
  
 注意：推理过程会首先将原始模型按层分拆，转存。请保证huggingface cache目录有足够的磁盘空间。
 
+## Acknowledgement
+
+A lot of the code are based on SimJeg's great work in the Kaggle exam competition. Big shoutout to SimJeg:
+
+[GitHub account @SimJeg](https://github.com/SimJeg), 
+[the code on Kaggle](https://www.kaggle.com/code/simjeg/platypus2-70b-with-wikipedia-rag), 
+[the associated discussion](https://www.kaggle.com/competitions/kaggle-llm-science-exam/discussion/446414).
+
 
 ## FAQ
 
