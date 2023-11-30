@@ -54,7 +54,7 @@ input_tokens = model.tokenizer(input_text,
            
 generation_output = model.generate(
     input_tokens['input_ids'].cuda(), 
-    max_new_tokens=2,
+    max_new_tokens=20,
     use_cache=True,
     return_dict_in_generate=True)
 
