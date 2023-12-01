@@ -21,6 +21,8 @@ setuptools.setup(
         'safetensors',
         'optimum',
         'huggingface_hub'
+        'scipy',
+        #'bitsandbytes' set it to optional to support fallback when not installable
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
