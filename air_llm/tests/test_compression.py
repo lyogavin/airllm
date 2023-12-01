@@ -40,4 +40,4 @@ class TestCompression(unittest.TestCase):
                     else:
                         RMSE_loss = torch.sqrt(loss_fn(aa[k], a_state_dict[k])).detach().cpu().item()
                         print(f"compression {compression} loss: {RMSE_loss}")
-                        self.assertLess(RMSE_loss, 2.5)
+                        self.assertLess(RMSE_loss, 0.1)
