@@ -130,14 +130,14 @@ def compress_layer_state_dict(layer_state_dict, compression=None):
     if compression == '4bit':
         compressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
-            v_quant, quant_state = bnb.functional.quantize_nf4(v, blocksize=64)
+            v_quant, quant_state = bnb.functional.quantize_nf4(v.cuda(), blocksize=64)
             compressed_layer_state_dict[k] = v_quant
             for quant_state_k, quant_state_v in save_quant_state_to_dict(quant_state).items():
                 compressed_layer_state_dict[k + ".4bit." + quant_state_k] = quant_state_v
     elif compression == '8bit':
         compressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
-            v_quant, quant_state = bnb.functional.quantize_blockwise(v, blocksize=2048)
+            v_quant, quant_state = bnb.functional.quantize_blockwise(v.cuda(), blocksize=2048)
             absmax = quant_state.absmax
             code = quant_state.code
             compressed_layer_state_dict[k] = v_quant
