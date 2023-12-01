@@ -34,7 +34,7 @@ class TestCompression(unittest.TestCase):
             for k in aa.keys():
 
                 if compression is None:
-                    self.assertAlmostEqual(aa[k], a_state_dict[k])
+                    self.assertTrue(torch.eq(aa[k], a_state_dict[k]))
                 else:
                     RMSE_loss = torch.sqrt(loss_fn(aa[k], a_state_dict[k]))
                     self.assertLess(RMSE_loss.detach().numpy()[0], 0.5)
