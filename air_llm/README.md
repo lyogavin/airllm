@@ -81,7 +81,7 @@ Note: During inference, the original model will first be decomposed and saved la
 
 ### 3. Compression - 3x Inference Speed!
 
-We just added model compression based on block-wise quantization based model compression. Which can further **speed up the inference speed** for up to **3x** , with almost ignorable accuracy loss(see more performance evaluation and why we use block-wise quantization in [this paper](https://arxiv.org/abs/2212.09720))!
+We just added model compression based on block-wise quantization based model compression. Which can further **speed up the inference speed** for up to **3x** , with **almost ignorable accuracy loss!** (see more performance evaluation and why we use block-wise quantization in [this paper](https://arxiv.org/abs/2212.09720))
 
 ![speed_improvement](https://github.com/lyogavin/Anima/blob/main/assets/airllm2_time_improvement.png?v=2&raw=true)
 
