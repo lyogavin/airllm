@@ -93,7 +93,7 @@ We just added model compression based on block-wise quantization based model com
 
 ```python
 model = AirLLMLlama2("garage-bAInd/Platypus2-70B-instruct",
-                    compression='4bit' # specify '8bit' for 8-bit block-wise quantization 
+                     compression='4bit' # specify '8bit' for 8-bit block-wise quantization 
                     )
 ```
 
