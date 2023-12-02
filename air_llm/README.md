@@ -79,7 +79,7 @@ Note: During inference, the original model will first be decomposed and saved la
 注意：推理过程会首先将原始模型按层分拆，转存。请保证huggingface cache目录有足够的磁盘空间。
 
 
-### 3. Compression - 3x Inference Speed!
+### 3. Model Compression - 3x Inference Speed Up!
 
 We just added model compression based on block-wise quantization based model compression. Which can further **speed up the inference speed** for up to **3x** , with **almost ignorable accuracy loss!** (see more performance evaluation and why we use block-wise quantization in [this paper](https://arxiv.org/abs/2212.09720))
 
