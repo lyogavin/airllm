@@ -2,10 +2,19 @@ AirLLM optimizes inference memory usage, allowing 70B large language models to r
 
 AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理。不需要任何损失模型性能的量化和蒸馏，剪枝等模型压缩。
 
+## Updates
+
+
+[2023/12/01] airllm 2.0. Support compressions: **3x run time speed up!**
+
+[2023/11/20] airllm Initial verion!
+
+
+
 
 ## Quickstart
 
-### install package
+### 1. install package
 
 First, install airllm pip package.
 
@@ -20,7 +29,7 @@ pip install airllm
 pip install -i https://pypi.org/simple/ airllm
 ```
 
-### Inference
+### 2. Inference
 
 Then, initialize AirLLMLlama2, pass in the huggingface repo ID of the model being used, or the local path, and inference can be performed similar to a regular transformer model.
 
@@ -68,6 +77,34 @@ print(output)
 Note: During inference, the original model will first be decomposed and saved layer-wise. Please ensure there is sufficient disk space in the huggingface cache directory.
  
 注意：推理过程会首先将原始模型按层分拆，转存。请保证huggingface cache目录有足够的磁盘空间。
+
+
+### 3. Compression - 3x Inference Speed!
+
+We just added model compression based on block-wise quantization based model compression. Which can further **speed up the inference speed** for up to **3x** , with almost ignorable accuracy loss(see more performance evaluation and why we use block-wise quantization in [this paper](https://arxiv.org/abs/2212.09720))!
+
+![speed_improvement](https://github.com/lyogavin/Anima/blob/main/assets/airllm2_time_improvement.png?raw=true)
+
+#### how to enalbe model compression speed up:
+
+* Step 1. make sure you have [bitsandbytes](https://github.com/TimDettmers/bitsandbytes) installed by `pip install -U bitsandbytes `
+* Step 2. make sure airllm verion later than 2.0.0: `pip install -U airllm` 
+* Step 3. when initialize the model, passing the argument compression ('4bit' or '8bit'):
+
+```python
+model = AirLLMLlama2("garage-bAInd/Platypus2-70B-instruct"
+					 compression='4bit' # specify '8bit' for 8-bit block-wise quantization 
+					 )
+```
+
+### 4. All supported configurations
+ 
+When initialize the model, we support the following configurations:
+
+* **compression**: supported options: 4bit,  8bit for 4-bit or 8-bit block-wise quantization, or by default None for no compression
+* **profiling_mode**: supported options: True to output time consumptions or by default False
+* **layer_shards_saving_path**: optionally another path to save the splitted model
+
 
 ## Acknowledgement
 
