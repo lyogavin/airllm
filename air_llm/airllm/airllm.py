@@ -150,8 +150,8 @@ def compress_layer_state_dict(layer_state_dict, compression=None):
         compressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
             v_quant, quant_state = bnb.functional.quantize_blockwise(v.cuda(), blocksize=2048)
-            absmax = quant_state.absmax
-            code = quant_state.code
+            absmax = quant_state.absmax.clone().contiguous()
+            code = quant_state.code.clone().contiguous()
             compressed_layer_state_dict[k] = v_quant
             compressed_layer_state_dict[k + ".8bit.absmax"] = absmax
             compressed_layer_state_dict[k + ".8bit.code"] = code
