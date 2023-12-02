@@ -92,9 +92,9 @@ We just added model compression based on block-wise quantization based model com
 * Step 3. when initialize the model, passing the argument compression ('4bit' or '8bit'):
 
 ```python
-model = AirLLMLlama2("garage-bAInd/Platypus2-70B-instruct"
-					 compression='4bit' # specify '8bit' for 8-bit block-wise quantization 
-					 )
+model = AirLLMLlama2("garage-bAInd/Platypus2-70B-instruct",
+                                  compression='4bit' # specify '8bit' for 8-bit block-wise quantization 
+                                  )
 ```
 
 ### 4. All supported configurations
