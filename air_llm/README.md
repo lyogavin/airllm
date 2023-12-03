@@ -111,7 +111,9 @@ When initialize the model, we support the following configurations:
 
 ### 5. Supported Models
 
-#### [HF open llm leaderboard](https://huggingface.co/spaces/HuggingFaceH4/open_llm_leaderboard) top models
+#### [HF open llm leaderboard](https://huggingface.co/spaces/HuggingFaceH4/open_llm_leaderboard) top models 
+
+**Including but not limited to the following:** (Most of the open models are based on llama2, so should be supported by default)
 
 @12/01/23
 
@@ -130,6 +132,8 @@ When initialize the model, we support the following configurations:
 
 
 #### [opencompass leaderboard](https://opencompass.org.cn/leaderboard-llm) top models
+
+**Including but not limited to the following:** (Most of the open models are based on llama2, so should be supported by default)
 
 @12/01/23
 
