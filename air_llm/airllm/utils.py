@@ -155,7 +155,8 @@ def compress_layer_state_dict(layer_state_dict, compression=None):
     return compressed_layer_state_dict if compressed_layer_state_dict is not None else layer_state_dict
 
 
-def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitted_model_dir_name='splitted_model', compression=None):
+def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitted_model_dir_name='splitted_model',
+                          compression=None, layer_names=None):
     """
     Save the all layers of a model sharded checkpoint using safetensors.
     """
@@ -190,8 +191,19 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         with open(checkpoint_path / 'model.safetensors.index.json', 'rb') as f:
             index = json.load(f)['weight_map']
 
-    n_layers = len(set([int(k.split('.')[2]) for k in index.keys() if 'model.layers' in k]))
-    layers = ['model.embed_tokens.'] + [f'model.layers.{i}.' for i in range(n_layers)] + ['model.norm.', 'lm_head.']
+    if layer_names is None:
+        n_layers = len(set([int(k.split('.')[2]) for k in index.keys() if 'model.layers' in k]))
+    else:
+        n_layers = len(set([int(k[len(layer_names['layer_prefix']):].split('.')[1]) for k in index.keys() if layer_names['layer_prefix'] in k]))
+
+    if layer_names is None:
+        layers = ['model.embed_tokens.'] + [f'model.layers.{i}.' for i in range(n_layers)] + ['model.norm.', 'lm_head.']
+    else:
+        layers = [layer_names['embed']] + [f'{layer_names["layer_prefix"]}.{i}' for i in range(n_layers)] + [layer_names['norm'], layer_names['lm_head']]
+
+        if 'rotary_pos_emb' in layer_names:
+            layers = [layer_names['rotary_pos_emb']] + layers
+        layers = [l + "." for l in layers]
     shard = 0
     n_shards = len(set(index.values()))
     state_dict = {}
@@ -235,7 +247,8 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
     return str(saving_path)
 
-def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards_saving_path=None, compression=None):
+def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards_saving_path=None, compression=None,
+                                       layer_names=None):
     """
     find the model's local cache path, download the cache if not exists, then split and save the model.
 
@@ -260,7 +273,8 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
     if os.path.exists(model_local_path_or_repo_id):
         if os.path.exists(Path(model_local_path_or_repo_id) / 'pytorch_model.bin.index.json') or \
            os.path.exists(Path(model_local_path_or_repo_id) / 'model.safetensors.index.json'):
-            return Path(model_local_path_or_repo_id), split_and_save_layers(model_local_path_or_repo_id, layer_shards_saving_path, compression=compression)
+            return Path(model_local_path_or_repo_id), split_and_save_layers(model_local_path_or_repo_id, layer_shards_saving_path,
+                                                                            compression=compression, layer_names=layer_names)
         else:
             print(
                 f"Found local directory in {model_local_path_or_repo_id}, but didn't find downloaded model. Try using {model_local_path_or_repo_id} as a HF repo...")
@@ -272,5 +286,6 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
            f"{hf_cache_path}/pytorch_model.bin.index.json or {hf_cache_path}/model.safetensors.index.json should exists."
 
     # if splitted_model subdir exists under cache use it, otherwise split and save
-    return Path(hf_cache_path), split_and_save_layers(hf_cache_path, layer_shards_saving_path, compression=compression)
+    return Path(hf_cache_path), split_and_save_layers(hf_cache_path, layer_shards_saving_path,
+                                                      compression=compression, layer_names=layer_names)
 

@@ -7,6 +7,8 @@ AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理�
 ## Updates
 
 
+[2023/12/03] added support of **ChatGLM**!
+
 [2023/12/02] added support for safetensors. Now support all top 10 models in open llm leaderboard.
 
 [2023/12/01] airllm 2.0. Support compressions: **3x run time speed up!**
@@ -117,18 +119,18 @@ When initialize the model, we support the following configurations:
 
 @12/01/23
 
-| Rank  | Model | Supported |
-| ------------- | ------------- | ------------- |
-| 1 | TigerResearch/tigerbot-70b-chat-v2  | ✅ |
-| 2 | upstage/SOLAR-0-70b-16bit | ✅ |
-| 3 | ICBU-NPU/FashionGPT-70B-V1.1 | ✅ |
-| 4 | sequelbox/StellarBright | ✅ |
-| 5 | bhenrym14/platypus-yi-34b  | ✅ |
-| 6 | MayaPH/GodziLLa2-70B  | ✅ |
-| 7 | 01-ai/Yi-34B | ✅ |
-| 8 | garage-bAInd/Platypus2-70B-instruct  | ✅ |
-| 9 | jondurbin/airoboros-l2-70b-2.2.1  | ✅ |
-| 10 | chargoddard/Yi-34B-Llama  | ✅ |
+| Rank  | Model | Supported | Model Class |
+| ------------- | ------------- | ------------- | ------------- |
+| 1 | TigerResearch/tigerbot-70b-chat-v2  | ✅ | AirLLMLlama2 |
+| 2 | upstage/SOLAR-0-70b-16bit | ✅ | AirLLMLlama2 |
+| 3 | ICBU-NPU/FashionGPT-70B-V1.1 | ✅ | AirLLMLlama2 |
+| 4 | sequelbox/StellarBright | ✅ | AirLLMLlama2 |
+| 5 | bhenrym14/platypus-yi-34b  | ✅ | AirLLMLlama2 |
+| 6 | MayaPH/GodziLLa2-70B  | ✅ | AirLLMLlama2 |
+| 7 | 01-ai/Yi-34B | ✅ | AirLLMLlama2 |
+| 8 | garage-bAInd/Platypus2-70B-instruct  | ✅ | AirLLMLlama2 |
+| 9 | jondurbin/airoboros-l2-70b-2.2.1  | ✅ | AirLLMLlama2 |
+| 10 | chargoddard/Yi-34B-Llama  | ✅ | AirLLMLlama2 |
 
 
 #### [opencompass leaderboard](https://opencompass.org.cn/leaderboard-llm) top models
@@ -137,18 +139,39 @@ When initialize the model, we support the following configurations:
 
 @12/01/23
 
-| Rank  | Model | Supported |
-| ------------- | ------------- | ------------- |
-| 1 | GPT-4  | closed.ai😓 |
-| 2 | TigerResearch/tigerbot-70b-chat-v2 | ✅ |
-| 3 | THUDM/chatglm3-6b-base | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) |
-| 4 | Qwen/Qwen-14B | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) |
-| 5 | 01-ai/Yi-34B  | ✅ |
-| 6 | ChatGPT  | closed.ai😓  |
-| 7 | OrionStarAI/OrionStar-Yi-34B-Chat | ✅ |
-| 8 | Qwen/Qwen-14B-Chat  | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) |
-| 9 | Duxiaoman-DI/XuanYuan-70B  | ✅ |
-| 10 | internlm/internlm-20b  | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) |
+| Rank  | Model | Supported | Model Class |
+| ------------- | ------------- | ------------- | ------------- |
+| 1 | GPT-4  | closed.ai😓 | N/A |
+| 2 | TigerResearch/tigerbot-70b-chat-v2 | ✅ | AirLLMLlama2 |
+| 3 | THUDM/chatglm3-6b-base | ✅ | AirLLMChatGLM |
+| 4 | Qwen/Qwen-14B | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) | AirLLMLlama2 |
+| 5 | 01-ai/Yi-34B  | ✅ | AirLLMLlama2 |
+| 6 | ChatGPT  | closed.ai😓  | N/A |
+| 7 | OrionStarAI/OrionStar-Yi-34B-Chat | ✅ | AirLLMLlama2 |
+| 8 | Qwen/Qwen-14B-Chat  | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) | AirLLMLlama2 |
+| 9 | Duxiaoman-DI/XuanYuan-70B  | ✅ | AirLLMLlama2 |
+| 10 | internlm/internlm-20b  | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) | AirLLMLlama2 |
+
+#### example of other models:
+
+```python
+from airllm import AirLLMChatGLM
+MAX_LENGTH = 128
+model = AirLLMChatGLM("THUDM/chatglm3-6b-base")
+input_text = ['What is the capital of China?',]
+input_tokens = model.tokenizer(input_text,
+    return_tensors="pt", 
+    return_attention_mask=False, 
+    truncation=True, 
+    max_length=MAX_LENGTH, 
+    padding=True)
+generation_output = model.generate(
+    input_tokens['input_ids'].cuda(), 
+    max_new_tokens=5,
+    use_cache=False,
+    return_dict_in_generate=True)
+model.tokenizer.decode(generation_output.sequences[0])
+```
 
 ## Acknowledgement
 
