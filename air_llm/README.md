@@ -7,6 +7,8 @@ AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理�
 ## Updates
 
 
+[2023/12/02] added support for safetensors. Now support all top 10 models in open llm leaderboard.
+
 [2023/12/01] airllm 2.0. Support compressions: **3x run time speed up!**
 
 [2023/11/20] airllm Initial verion!
@@ -107,6 +109,42 @@ When initialize the model, we support the following configurations:
 * **profiling_mode**: supported options: True to output time consumptions or by default False
 * **layer_shards_saving_path**: optionally another path to save the splitted model
 
+### 5. Supported Models
+
+#### [HF open llm leaderboard](https://huggingface.co/spaces/HuggingFaceH4/open_llm_leaderboard) top models
+
+@12/01/23
+
+| Rank  | Model | Supported |
+| ------------- | ------------- | ------------- |
+| 1 | TigerResearch/tigerbot-70b-chat-v2  | ✅ |
+| 2 | upstage/SOLAR-0-70b-16bit | ✅ |
+| 3 | ICBU-NPU/FashionGPT-70B-V1.1 | ✅ |
+| 4 | sequelbox/StellarBright | ✅ |
+| 5 | bhenrym14/platypus-yi-34b  | ✅ |
+| 6 | MayaPH/GodziLLa2-70B  | ✅ |
+| 7 | 01-ai/Yi-34B | ✅ |
+| 8 | garage-bAInd/Platypus2-70B-instruct  | ✅ |
+| 9 | jondurbin/airoboros-l2-70b-2.2.1  | ✅ |
+| 10 | chargoddard/Yi-34B-Llama  | ✅ |
+
+
+#### [opencompass leaderboard](https://opencompass.org.cn/leaderboard-llm) top models
+
+@12/01/23
+
+| Rank  | Model | Supported |
+| ------------- | ------------- | ------------- |
+| 1 | GPT-4  | closed.ai😓 |
+| 2 | TigerResearch/tigerbot-70b-chat-v2 | ✅ |
+| 3 | THUDM/chatglm3-6b-base | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) |
+| 4 | Qwen/Qwen-14B | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) |
+| 5 | 01-ai/Yi-34B  | ✅ |
+| 6 | ChatGPT  | closed.ai😓  |
+| 7 | OrionStarAI/OrionStar-Yi-34B-Chat | ✅ |
+| 8 | Qwen/Qwen-14B-Chat  | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) |
+| 9 | Duxiaoman-DI/XuanYuan-70B  | ✅ |
+| 10 | internlm/internlm-20b  | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) |
 
 ## Acknowledgement
 
@@ -126,3 +164,11 @@ safetensors_rust.SafetensorError: Error while deserializing header: MetadataInco
 If you run into this error, most possible cause is you run out of disk space. The process of splitting model is very disk-consuming. See [this](https://huggingface.co/TheBloke/guanaco-65B-GPTQ/discussions/12). You may need to extend your disk space, clear huggingface [.cache](https://huggingface.co/docs/datasets/cache) and rerun. 
 
 如果你碰到这个error，很有可能是空间不足。可以参考一下[这个](https://huggingface.co/TheBloke/guanaco-65B-GPTQ/discussions/12) 可能需要扩大硬盘空间，删除huggingface的[.cache](https://huggingface.co/docs/datasets/cache)，然后重新run。
+
+## Contribution 
+
+Welcome contribution, ideas and discussions!
+
+If you find it useful, please ⭐ or buy me a coffee! 🙏
+
+[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://bmc.link/lyogavinQ)

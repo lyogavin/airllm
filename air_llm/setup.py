@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="airllm",
-    version="2.0.0",
+    version="2.1.0",
     author="Gavin Li",
     author_email="gavinli@animaai.cloud",
     description="AirLLM allows single 4GB GPU card to run 70B large language models without quantization, distillation or pruning.",
@@ -13,14 +13,14 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/lyogavin/Anima/tree/main/air_llm",
     packages=setuptools.find_packages(),
-    install_requires=[  # I get to this in a second
+    install_requires=[
         'tqdm',
         'torch',
         'transformers',
         'accelerate',
         'safetensors',
         'optimum',
-        'huggingface_hub'
+        'huggingface-hub'
         'scipy',
         #'bitsandbytes' set it to optional to support fallback when not installable
     ],
