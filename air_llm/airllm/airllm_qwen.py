@@ -205,7 +205,7 @@ class AirLLMQWen(GenerationMixin):
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-        print(f"input_ids shape: {input_ids.shape}")
+        #print(f"input_ids shape: {input_ids.shape}")
 
         global total_disk_loading_time, total_gpu_loading_time, total_compression_overhead_time
 
@@ -222,7 +222,7 @@ class AirLLMQWen(GenerationMixin):
 
         batch = [input_ids_unit.to(self.running_device).unsqueeze(0) for input_ids_unit in input_ids]
         n_seq = len(batch[0])
-        print(f"batch[0] shape:{batch[0].shape}")
+        #print(f"batch[0] shape:{batch[0].shape}")
         #batch_eos = [(input_ids_unit != self.tokenizer.pad_token_id).sum(0) - 1 for input_ids_unit in input_ids]
 
         # Create attention mask for the largest input, and position ids to use KV cache
@@ -242,7 +242,7 @@ class AirLLMQWen(GenerationMixin):
 
             for i, (layer_name, layer) in tqdm(enumerate(zip(self.layer_names, self.layers)), desc=self.running_device,
                                                total=len(self.layers)):
-                print(f"layer:{i} {layer_name}")
+                #print(f"layer:{i} {layer_name}")
 
                 load_layer_to_cpu_output = self.load_layer_to_cpu(layer_name, self.profiling_mode)
                 # profile
@@ -382,7 +382,7 @@ class AirLLMQWen(GenerationMixin):
             for i in range(len(kv_cache_list)):
                 # print(f"{i} - {kv_cache_list[i][0].shape}")
                 kv_cache_list[i] = (torch.cat(kv_cache_list[i][0], 0), torch.cat(kv_cache_list[i][1], 0))
-            print(f"returning kvcache size: {kv_cache_list[0][0].shape}")
+            #print(f"returning kvcache size: {kv_cache_list[0][0].shape}")
 
         if output_attentions:
             all_self_attns = all_self_attns[0:-2]
