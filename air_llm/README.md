@@ -132,6 +132,7 @@ When initialize the model, we support the following configurations:
 
 #### [HF open llm leaderboard](https://huggingface.co/spaces/HuggingFaceH4/open_llm_leaderboard) top models 
 
+
 **Including but not limited to the following:** (Most of the open models are based on llama2, so should be supported by default)
 
 @12/01/23
@@ -242,6 +243,9 @@ model.tokenizer.decode(generation_output.sequences[0])
 
 
 </details>
+
+
+####To request other model support: [here](https://docs.google.com/forms/d/e/1FAIpQLSe0Io9ANMT964Zi-OQOq1TJmnvP-G3_ZgQDhP7SatN0IEdbOg/viewform?usp=sf_link)
 
 
 
