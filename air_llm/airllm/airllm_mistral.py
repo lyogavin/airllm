@@ -35,7 +35,7 @@ total_compression_overhead_time = None
 
 
 
-class AirLLMLlama2(GenerationMixin):
+class AirLLMMistral(GenerationMixin):
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=torch.float16, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None):
         """
@@ -72,24 +72,31 @@ class AirLLMLlama2(GenerationMixin):
         self.compression = compression
 
         # Save parameters
+
+        self.layer_names_dict = {'embed': 'model.embed_tokens',
+                       'layer_prefix': 'model.layers',
+                       'norm': 'model.norm',
+                       'lm_head': 'lm_head',}
         self.model_local_path, self.checkpoint_path = find_or_create_local_splitted_path(model_local_path_or_repo_id,
                                                                                          layer_shards_saving_path,
-                                                                                         compression=compression)
+                                                                                         compression=compression,
+                                                                                         layer_names=self.layer_names_dict)
         self.running_device = device
         self.device = torch.device(self.running_device)
         self.running_dtype = dtype
         self.dtype = self.running_dtype
 
         # Create model
-        self.config = AutoConfig.from_pretrained(self.model_local_path)
-        self.generation_config = GenerationConfig.from_pretrained(self.model_local_path)
+        self.config = AutoConfig.from_pretrained(self.model_local_path, trust_remote_code=True)
+        self.generation_config = GenerationConfig()#GenerationConfig.from_pretrained(self.model_local_path)
         #print(f"using generation_config: {self.generation_config}")
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_local_path)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.tokenizer.padding_side = "right"
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_local_path, trust_remote_code=True)
+        #self.tokenizer.pad_token = self.tokenizer.eos_token
+        #self.tokenizer.padding_side = "right"
         self.init_model()
-        self.layer_names = ["model.embed_tokens"] + [f"model.layers.{i}" for i in
-                                                     range(len(self.model.model.layers))] + ["model.norm", "lm_head"]
+        self.layer_names = [self.layer_names_dict['embed']] + [f'{self.layer_names_dict["layer_prefix"]}.{i}' for i in range(len(self.model.model.layers))] + \
+                           [self.layer_names_dict['norm'], self.layer_names_dict['lm_head']]
+
         self.max_seq_len = max_seq_len
 
         self.main_input_name = "input_ids"
@@ -98,9 +105,9 @@ class AirLLMLlama2(GenerationMixin):
 
         # Load meta model (no memory used)
         with init_empty_weights():
-            self.model = AutoModelForCausalLM.from_config(self.config)
+            self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
             self.model.eval()
-            self.model = BetterTransformer.transform(self.model)  # enable flash attention
+            #self.model = BetterTransformer.transform(self.model)  # enable flash attention
             self.model.tie_weights()
 
         self.layers = [self.model.model.embed_tokens] + list(self.model.model.layers) + [self.model.model.norm,
@@ -110,6 +117,14 @@ class AirLLMLlama2(GenerationMixin):
         for buffer_name, buffer in self.model.named_buffers():
             set_module_tensor_to_device(self.model, buffer_name, self.running_device, value=buffer,
                                         dtype=self.running_dtype)
+
+        if 'rotary_pos_emb' in self.layer_names_dict:
+            # for glm keep rotary_pos_emb in gpu
+            self.load_rotary_pos_emb_to_device()
+
+    def load_rotary_pos_emb_to_device(self):
+        state_dict = load_layer(self.checkpoint_path, self.layer_names_dict['layer_names_dict'])
+        self.move_layer_to_device(state_dict)
 
     def load_layer_to_cpu(self, layer_name, profiling=False):
 
@@ -128,7 +143,7 @@ class AirLLMLlama2(GenerationMixin):
 
     def move_layer_to_device(self, state_dict):
         for param_name, param in state_dict.items():
-            assert param.dtype != torch.int8, "int8 not supported (need to add fp16_statistics)"
+            #assert param.dtype != torch.int8, "int8 not supported (need to add fp16_statistics)"
             set_module_tensor_to_device(self.model, param_name, self.running_device, value=param,
                                         dtype=self.running_dtype)
 
@@ -191,6 +206,7 @@ class AirLLMLlama2(GenerationMixin):
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
+        #print(f"input_ids shape: {input_ids.shape}")
 
         global total_disk_loading_time, total_gpu_loading_time, total_compression_overhead_time
 
@@ -207,7 +223,8 @@ class AirLLMLlama2(GenerationMixin):
 
         batch = [input_ids_unit.to(self.running_device).unsqueeze(0) for input_ids_unit in input_ids]
         n_seq = len(batch[0])
-        batch_eos = [(input_ids_unit != self.tokenizer.pad_token_id).sum(0) - 1 for input_ids_unit in input_ids]
+        #print(f"batch[0] shape:{batch[0].shape}")
+        #batch_eos = [(input_ids_unit != self.tokenizer.pad_token_id).sum(0) - 1 for input_ids_unit in input_ids]
 
         # Create attention mask for the largest input, and position ids to use KV cache
         attention_mask = torch.ones(self.max_seq_len, self.max_seq_len)
@@ -220,12 +237,13 @@ class AirLLMLlama2(GenerationMixin):
             for x in self.layers:
                 kv_cache_list.append(([], []))
         all_hidden_states = [] * len(self.layers) if output_hidden_states else None
-        all_self_attns = [] * len(self.layers) if output_attentions else None
+        all_self_attns = None
 
         with torch.inference_mode():
 
             for i, (layer_name, layer) in tqdm(enumerate(zip(self.layer_names, self.layers)), desc=self.running_device,
                                                total=len(self.layers)):
+                #print(f"layer:{i} {layer_name}")
 
                 load_layer_to_cpu_output = self.load_layer_to_cpu(layer_name, self.profiling_mode)
                 # profile
@@ -246,15 +264,17 @@ class AirLLMLlama2(GenerationMixin):
                 # Run layer
 
                 for j, seq in enumerate(batch):
+                    #print(f"{j}th in batch shape: {seq.shape}")
 
-                    if layer_name == "model.embed_tokens":
+                    if layer_name == self.layer_names_dict['embed']:
                         batch[j] = layer(seq)
-                    elif layer_name == "model.norm":
-                        batch[j] = layer(seq[torch.arange(n_seq), batch_eos[j]][:, None])
+                    elif layer_name == self.layer_names_dict['norm']:
+                        #batch[j] = layer(seq[torch.arange(n_seq), batch_eos[j]][:, None])
+                        batch[j] = layer(seq)
 
                         if output_attentions:
                             all_hidden_states[i].append(batch[j])
-                    elif layer_name == "lm_head":
+                    elif layer_name == self.layer_names_dict['lm_head']:
                         batch[j] = layer(seq).float()
                     else:
 
@@ -262,12 +282,14 @@ class AirLLMLlama2(GenerationMixin):
                             all_hidden_states[i].append(new_seq)
 
                         if past_key_values is not None:
+                            #print(f"len past_key_values: {len(past_key_values)}, past_key_values[0][0] shape:{past_key_values[0][0].shape}")
                             # join past kv
                             k_cache, v_cache = past_key_values[i - 1]
                             len_p = past_key_values[0][0].shape[2]
                             len_s = seq.shape[1]
 
                             pos = position_ids[:, len_p:len_p + len_s]
+
                             attn = attention_mask[:, :, -len_s:, -len_p - len_s:]
                             kv_cache = (k_cache,
                                         v_cache,
@@ -278,6 +300,7 @@ class AirLLMLlama2(GenerationMixin):
                                                   output_attentions=output_attentions,
                                                   past_key_value=kv_cache,
                                                   position_ids=pos,
+                                                  #rotary_pos_emb_list=rotary_pos_emb_list,
                                                   attention_mask=attn
                                                   )
                             new_seq = layer_outputs[0]
@@ -286,7 +309,7 @@ class AirLLMLlama2(GenerationMixin):
                                 all_self_attns[i].append(layer_outputs[1])
 
                             if use_cache:
-                                (k_cache, v_cache) = layer_outputs[2 if output_attentions else 1]
+                                (k_cache, v_cache) = layer_outputs[1]
                                 kv_cache_list[i][0].append(k_cache)
                                 kv_cache_list[i][1].append(v_cache)
 
@@ -294,14 +317,19 @@ class AirLLMLlama2(GenerationMixin):
                         else:
                             len_seq = seq.shape[1]
 
+
                             if not use_cache:
                                 new_seq = layer(seq,
-                                                attention_mask=attention_mask[:, :, -len_seq:, -len_seq:])[0]
+                                                #rotary_pos_emb_list=rotary_pos_emb_list,
+                                                attention_mask=attention_mask[:, :, -len_seq:, -len_seq:]
+                                               )[0]
                             else:
                                 new_seq, (k_cache, v_cache) = layer(seq,
                                                                     use_cache=True,
+                                                                    #rotary_pos_emb_list=rotary_pos_emb_list,
                                                                     attention_mask=attention_mask[:, :, -len_seq:,
-                                                                                   -len_seq:])
+                                                                                   -len_seq:]
+                                                                    )
                                 kv_cache_list[i][0].append(k_cache)
                                 kv_cache_list[i][1].append(v_cache)
 
@@ -341,7 +369,9 @@ class AirLLMLlama2(GenerationMixin):
                                      tuple(all_hidden_states) if all_hidden_states is not None else None,
                                      tuple(all_self_attns) if all_self_attns is not None else None] if v is not None)
         if self.profiling_mode:
+
             forward_elapsed_time = time.process_time() - forward_start
+
             if self.compression:
                 print(f"total disk loading time: {sum(total_disk_loading_time):.04f}")
                 print(f"total gpu loading time: {sum(total_gpu_loading_time):.04f}")
@@ -349,7 +379,6 @@ class AirLLMLlama2(GenerationMixin):
             else:
                 # loading is async/lazy, so can't really distinguish them...
                 print(f"total disk+gpu loading time: {sum(total_disk_loading_time) + sum(total_gpu_loading_time):.04f}")
-
             print(f"total infer time(including all above plus gpu compute): {forward_elapsed_time:.04f}")
 
             total_disk_loading_time = []

@@ -7,9 +7,9 @@ AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理�
 ## Updates
 
 
-[2023/12/03] added support of **ChatGLM**, **QWen**!
+[2023/12/03] added support of **ChatGLM**, **QWen**, **Baichuan**, **Mistral**, **InternLM**!
 
-支持ChatGLM, QWEN!
+支持ChatGLM, QWEN, Baichuan, Mistral, InternLM!
 
 [2023/12/02] added support for safetensors. Now support all top 10 models in open llm leaderboard.
 
@@ -148,6 +148,7 @@ When initialize the model, we support the following configurations:
 | 8 | garage-bAInd/Platypus2-70B-instruct  | ✅ | AirLLMLlama2 |
 | 9 | jondurbin/airoboros-l2-70b-2.2.1  | ✅ | AirLLMLlama2 |
 | 10 | chargoddard/Yi-34B-Llama  | ✅ | AirLLMLlama2 |
+| ？ | mistralai/Mistral-7B-Instruct-v0.1  | ✅ | AirLLMMistral |
 
 
 #### [opencompass leaderboard](https://opencompass.org.cn/leaderboard-llm) top models
@@ -167,12 +168,13 @@ When initialize the model, we support the following configurations:
 | 7 | OrionStarAI/OrionStar-Yi-34B-Chat | ✅ | AirLLMLlama2 |
 | 8 | Qwen/Qwen-14B-Chat  | ✅ | AirLLMQWen |
 | 9 | Duxiaoman-DI/XuanYuan-70B  | ✅ | AirLLMLlama2 |
-| 10 | internlm/internlm-20b  | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) |  |
-| 26 | baichuan-inc/Baichuan2-13B-Chat | ⏰(adding, [to accelerate😀](https://bmc.link/lyogavinQ)) | |
+| 10 | internlm/internlm-20b  | ✅ | AirLLMInternLM |
+| 26 | baichuan-inc/Baichuan2-13B-Chat | ✅ | AirLLMBaichuan |
 
-#### example of other models (ChatGLM, QWen, etc):
+#### example of other models (ChatGLM, QWen, Baichuan, Mistral, etc):
 
 <details>
+
 
 * ChatGLM:
 
@@ -214,6 +216,30 @@ generation_output = model.generate(
     return_dict_in_generate=True)
 model.tokenizer.decode(generation_output.sequences[0])
 ```
+
+
+* Baichuan, InternLM, Mistral, etc:
+
+```python
+from airllm import AirLLMBaichuan # AirLLMInternLM, AirLLMMistral
+MAX_LENGTH = 128
+model = AirLLMBaichuan("baichuan-inc/Baichuan2-7B-Base")
+#model = AirLLMInternLM("internlm/internlm-20b")
+#model = AirLLMMistral("mistralai/Mistral-7B-Instruct-v0.1")
+input_text = ['What is the capital of China?',]
+input_tokens = model.tokenizer(input_text,
+    return_tensors="pt", 
+    return_attention_mask=False, 
+    truncation=True, 
+    max_length=MAX_LENGTH)
+generation_output = model.generate(
+    input_tokens['input_ids'].cuda(), 
+    max_new_tokens=5,
+    use_cache=True,
+    return_dict_in_generate=True)
+model.tokenizer.decode(generation_output.sequences[0])
+```
+
 
 </details>
 
