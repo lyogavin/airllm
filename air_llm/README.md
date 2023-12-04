@@ -9,12 +9,19 @@ AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理�
 
 [2023/12/03] added support of **ChatGLM**, **QWen**!
 
+支持ChatGLM, QWEN!
+
 [2023/12/02] added support for safetensors. Now support all top 10 models in open llm leaderboard.
+
+支持safetensor系列模型，现在open llm leaderboard前10的模型都已经支持。
 
 [2023/12/01] airllm 2.0. Support compressions: **3x run time speed up!**
 
+airllm2.0。支持模型压缩，速度提升3倍。
+
 [2023/11/20] airllm Initial verion!
 
+airllm发布。
 
 
 
@@ -89,6 +96,8 @@ Note: During inference, the original model will first be decomposed and saved la
 
 We just added model compression based on block-wise quantization based model compression. Which can further **speed up the inference speed** for up to **3x** , with **almost ignorable accuracy loss!** (see more performance evaluation and why we use block-wise quantization in [this paper](https://arxiv.org/abs/2212.09720))
 
+我们增加了基于block-wise quantization的模型压缩，推理速度提升3倍几乎没有精度损失。精度评测可以参考此paper：[this paper](https://arxiv.org/abs/2212.09720)
+
 ![speed_improvement](https://github.com/lyogavin/Anima/blob/main/assets/airllm2_time_improvement.png?v=2&raw=true)
 
 #### how to enalbe model compression speed up:
@@ -103,9 +112,17 @@ model = AirLLMLlama2("garage-bAInd/Platypus2-70B-instruct",
                     )
 ```
 
+#### how model compression here is different from quantization?
+
+Quantization normally needs to quantize both weights and activations to really speed things up. Which makes it harder to maintain accuracy and avoid the impact of outliers in all kinds of inputs.
+
+While in our case the bottleneck is mainly at the disk loading, we only need to make the model loading size smaller. So we get to only quantize the weights part, which is easier to ensure the accuracy.
+
 ### 4. All supported configurations
  
 When initialize the model, we support the following configurations:
+
+初始化model的时候，可以指定以下的配置参数：
 
 * **compression**: supported options: 4bit,  8bit for 4-bit or 8-bit block-wise quantization, or by default None for no compression
 * **profiling_mode**: supported options: True to output time consumptions or by default False
