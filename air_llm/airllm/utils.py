@@ -117,10 +117,15 @@ def load_layer(local_path, layer_name, profiling=False):
 
 
 
-def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None):
+def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None, splitted_model_dir_name='splitted_model'):
     total_shard_files_size_bytes = 0
     for model_shard_file in glob(str(checkpoint_path / '*')):
         total_shard_files_size_bytes += os.path.getsize(model_shard_file)
+
+    total_saved_split_files_size_bytes = 0
+    if layer_shards_saving_path is not None:
+        for saved_split_file in glob(str(Path(layer_shards_saving_path) / splitted_model_dir_name / '*')):
+            total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
 
     if compression == '4bit':
         total_shard_files_size_bytes = int(total_shard_files_size_bytes / 0.2813)
@@ -129,9 +134,11 @@ def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None
 
     total, used, free = shutil.disk_usage(checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path)
 
-    if free < total_shard_files_size_bytes:
+    if free + total_saved_split_files_size_bytes < total_shard_files_size_bytes:
         raise NotEnoughSpaceException(f"Not enough space. Free space under {checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path}:"  \
-                                      f" {free / 1024 / 1024 / 1024:.02f}GB. Model total size: {total_shard_files_size_bytes / 1024 / 1024 / 1024:.02f}GB.")
+                                      f" {free / 1024 / 1024 / 1024:.02f}GB. Model total size: {total_shard_files_size_bytes / 1024 / 1024 / 1024:.02f}GB. " \
+                                      f"existing space under {checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path} assuming can reuse: {total_saved_split_files_size_bytes/ 1024 / 1024 / 1024:.02f}GB. "
+                                      )
 
 def compress_layer_state_dict(layer_state_dict, compression=None):
     compressed_layer_state_dict = None
@@ -173,13 +180,6 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     if layer_shards_saving_path is not None:
         saving_path = Path(layer_shards_saving_path) / splitted_model_dir_name
 
-    if os.path.exists(saving_path):
-        # already exists, assuming it's saved already, directly return
-        return str(saving_path)
-
-
-
-    check_space(checkpoint_path, layer_shards_saving_path, compression)
 
     safetensors_format = False
     if os.path.exists(checkpoint_path / 'pytorch_model.bin.index.json'):
@@ -204,6 +204,44 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         if 'rotary_pos_emb' in layer_names:
             layers = [layer_names['rotary_pos_emb']] + layers
         layers = [l + "." for l in layers]
+
+
+    # check if splitting exists and all files are there
+    found_layers = None
+    #print(f"checking exists: {saving_path}")
+    if os.path.exists(saving_path):
+        # dir already exists, check if all layer files are there
+        files_in_saving_path = glob(str(saving_path / "*.safetensors"))
+        done_files_in_saving_path = glob(str(saving_path / "*.safetensors.done"))
+
+        found_layers = {}
+        for layer in layers:
+
+            found_safetensor_file = [layer+'safetensors' in file_in_saving_path for file_in_saving_path in files_in_saving_path]
+            #print(layer)
+            #print(found_safetensor_file)
+            found_safetensor_file = any(found_safetensor_file)
+
+            found_done_file = [layer+'safetensors.done' in file_in_saving_path for file_in_saving_path in done_files_in_saving_path]
+            #print(found_done_file)
+            found_done_file = any(found_done_file)
+
+            found_layers[layer] = found_safetensor_file and found_done_file
+
+
+        if all(found_layers.values()):
+            # already downloaded, return saving path...
+            print(f"saved layers already found in {saving_path}")
+            return str(saving_path)
+        else:
+            print(f"some layer splits found, some are not, re-save all layers in case there's some corruptions.")
+
+
+
+    check_space(checkpoint_path, layer_shards_saving_path, compression, splitted_model_dir_name=splitted_model_dir_name)
+
+
+
     shard = 0
     n_shards = len(set(index.values()))
     state_dict = {}
@@ -211,7 +249,8 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
 
     if not os.path.exists(saving_path):
-        os.makedirs(saving_path)
+        #os.makedirs(saving_path)
+        saving_path.mkdir(parents=True, exist_ok=True)
 
     for layer in tqdm(layers):
 
@@ -234,9 +273,15 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
 
         # Save layer state dict as using safetensors
-        save_file(layer_state_dict, saving_path / (layer + 'safetensors'))
+        safetensor_exists = os.path.exists(str(saving_path / (layer + 'safetensors')))
+        done_marker_exists = os.path.exists(str(saving_path / (layer + 'safetensors.done')))
+        if (not safetensor_exists) or (not done_marker_exists):
+            save_file(layer_state_dict, saving_path / (layer + 'safetensors'))
 
-        print(f"saved as: {saving_path / (layer + 'safetensors')}")
+            print(f"saved as: {saving_path / (layer + 'safetensors')}")
+
+            # set done marker
+            (saving_path / (layer + 'safetensors.done')).touch()
 
         # Free memory
         for k in layer_state_dict.keys():
