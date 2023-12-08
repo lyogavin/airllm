@@ -293,7 +293,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     return str(saving_path)
 
 def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards_saving_path=None, compression=None,
-                                       layer_names=None):
+                                       layer_names=None, hf_token=None):
     """
     find the model's local cache path, download the cache if not exists, then split and save the model.
 
@@ -312,6 +312,8 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
         the path saved layer shards
     compression: str, optinal
         setting to '4bit' or '8bit' to enable compression from 16 bits to 4 bits/8 bits which speeed up 4x or 2x inference time with a tiny accuracy loss.
+    hf_token: str, optional
+        huggingface api token could be provided, by default None
     """
 
     # try local model path, if the model exist split and save there
@@ -325,7 +327,10 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
                 f"Found local directory in {model_local_path_or_repo_id}, but didn't find downloaded model. Try using {model_local_path_or_repo_id} as a HF repo...")
 
     # it should be a repo id at this point...
-    hf_cache_path = huggingface_hub.snapshot_download(model_local_path_or_repo_id)
+    if hf_token is not None:
+        hf_cache_path = huggingface_hub.snapshot_download(model_local_path_or_repo_id, token=hf_token)
+    else:
+        hf_cache_path = huggingface_hub.snapshot_download(model_local_path_or_repo_id)
     assert os.path.exists(Path(hf_cache_path) / 'pytorch_model.bin.index.json') or \
            os.path.exists(Path(hf_cache_path) / 'model.safetensors.index.json'), \
            f"{hf_cache_path}/pytorch_model.bin.index.json or {hf_cache_path}/model.safetensors.index.json should exists."

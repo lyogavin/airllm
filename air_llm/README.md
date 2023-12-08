@@ -118,7 +118,7 @@ Quantization normally needs to quantize both weights and activations to really s
 
 While in our case the bottleneck is mainly at the disk loading, we only need to make the model loading size smaller. So we get to only quantize the weights part, which is easier to ensure the accuracy.
 
-### 4. All supported configurations
+### 4. Configurations
  
 When initialize the model, we support the following configurations:
 
@@ -127,6 +127,7 @@ When initialize the model, we support the following configurations:
 * **compression**: supported options: 4bit,  8bit for 4-bit or 8-bit block-wise quantization, or by default None for no compression
 * **profiling_mode**: supported options: True to output time consumptions or by default False
 * **layer_shards_saving_path**: optionally another path to save the splitted model
+* **hf_token**: huggingface token can be provided here if downloading gated models like: *meta-llama/Llama-2-7b-hf*
 
 ### 5. Supported Models
 

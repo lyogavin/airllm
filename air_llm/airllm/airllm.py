@@ -37,7 +37,8 @@ total_compression_overhead_time = None
 
 class AirLLMLlama2(GenerationMixin):
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=torch.float16, max_seq_len=512,
-                 layer_shards_saving_path=None, profiling_mode=False, compression=None):
+                 layer_shards_saving_path=None, profiling_mode=False, compression=None,
+                 hf_token=None):
         """
         Sharded version of LlamaForCausalLM : the model is splitted into layer shards to reduce GPU memory usage.
         During the forward pass, the inputs are processed layer by layer, and the GPU memory is freed after each layer.
@@ -59,6 +60,8 @@ class AirLLMLlama2(GenerationMixin):
             if to profile the model loading time, default to False
         compression: str, optinal
             setting to '4bit' or '8bit' to enable compression from 16 bits to 4 bits/8 bits which speeed up 4x or 2x inference time with a tiny accuracy loss.
+        hf_token: str, optional
+            huggingface api token could be provided, by default None
         """
 
 
@@ -70,21 +73,32 @@ class AirLLMLlama2(GenerationMixin):
 
 
         self.compression = compression
+        self.hf_token = hf_token
 
         # Save parameters
         self.model_local_path, self.checkpoint_path = find_or_create_local_splitted_path(model_local_path_or_repo_id,
                                                                                          layer_shards_saving_path,
-                                                                                         compression=compression)
+                                                                                         compression=compression,
+                                                                                         hf_token=hf_token)
         self.running_device = device
         self.device = torch.device(self.running_device)
         self.running_dtype = dtype
         self.dtype = self.running_dtype
 
         # Create model
-        self.config = AutoConfig.from_pretrained(self.model_local_path)
+        if hf_token is not None:
+            self.config = AutoConfig.from_pretrained(self.model_local_path, token=hf_token)
+        else:
+            self.config = AutoConfig.from_pretrained(self.model_local_path)
+
         self.generation_config = GenerationConfig.from_pretrained(self.model_local_path)
         #print(f"using generation_config: {self.generation_config}")
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_local_path)
+
+        if hf_token is not None:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_local_path, token=hf_token)
+        else:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_local_path)
+
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "right"
         self.init_model()
