@@ -269,6 +269,31 @@ If you run into this error, most possible cause is you run out of disk space. Th
 
 如果你碰到这个error，很有可能是空间不足。可以参考一下[这个](https://huggingface.co/TheBloke/guanaco-65B-GPTQ/discussions/12) 可能需要扩大硬盘空间，删除huggingface的[.cache](https://huggingface.co/docs/datasets/cache)，然后重新run。
 
+### 2. ValueError: max() arg is an empty sequence
+
+Most likely you are loading QWen or ChatGLM model with Llama2 class. Try the following:
+
+For QWen model: 
+
+```python
+from airllm import AirLLMQWen #<----- instead of AirLLMLlama2
+```
+
+For ChatGLM model: 
+
+```python
+from airllm import AirLLM ChatGLM #<----- instead of AirLLMLlama2
+```
+
+### 3. 401 Client Error....Repo model ... is gated.
+
+Some models are gated models, needs huggingface api token. You can provide hf_token:
+
+```python
+model = AirLLMLlama2("meta-llama/Llama-2-7b-hf", #hf_token='HF_API_TOKEN')
+```
+
+
 ## Contribution 
 
 Welcome contribution, ideas and discussions!
