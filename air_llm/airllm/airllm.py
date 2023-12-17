@@ -130,9 +130,9 @@ class AirLLMLlama2(GenerationMixin):
 
     def load_layer_to_cpu(self, layer_name, profiling=False):
 
-        t = time.process_time()
+        t = time.time()
         load_layer_output = load_layer(self.checkpoint_path, layer_name, profiling)
-        elapsed_time = time.process_time() - t
+        elapsed_time = time.time() - t
 
         if profiling:
             state_dict, compression_time = load_layer_output
@@ -216,6 +216,7 @@ class AirLLMLlama2(GenerationMixin):
             total_gpu_loading_time = []
             total_compression_overhead_time = []
             forward_start = time.process_time()
+            forward_start_wall = time.time()
 
         # Reboot the model to make sure buffers are loaded and memory is clean
         del self.model
@@ -253,11 +254,11 @@ class AirLLMLlama2(GenerationMixin):
                 else:
                     state_dict = load_layer_to_cpu_output
 
-                t = time.process_time()
+                t = time.time()
                 self.move_layer_to_device(state_dict)
                 if self.profiling_mode:
                     torch.cuda.synchronize()
-                elapsed_time = time.process_time() - t
+                elapsed_time = time.time() - t
                 # profile
                 if self.profiling_mode:
                     total_gpu_loading_time.append(elapsed_time)
@@ -366,6 +367,7 @@ class AirLLMLlama2(GenerationMixin):
                                      tuple(all_self_attns) if all_self_attns is not None else None] if v is not None)
         if self.profiling_mode:
             forward_elapsed_time = time.process_time() - forward_start
+            forward_elapsed_time_wall = time.time() - forward_start_wall
             if self.compression:
                 print(f"total disk loading time: {sum(total_disk_loading_time):.04f}")
                 print(f"total gpu loading time: {sum(total_gpu_loading_time):.04f}")
@@ -376,7 +378,8 @@ class AirLLMLlama2(GenerationMixin):
                 #print(f"total disk loading time: {sum(total_disk_loading_time):.04f}")
                 #print(f"total gpu loading time: {sum(total_gpu_loading_time):.04f}")
 
-            print(f"total infer time(including all above plus gpu compute): {forward_elapsed_time:.04f}")
+            print(f"total infer process time(including all above plus gpu compute): {forward_elapsed_time:.04f}")
+            print(f"total infer wall time(including all above plus gpu compute): {forward_elapsed_time_wall:.04f}")
 
             total_disk_loading_time = []
             total_gpu_loading_time = []
