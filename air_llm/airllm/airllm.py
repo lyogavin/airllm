@@ -114,7 +114,10 @@ class AirLLMLlama2(GenerationMixin):
         with init_empty_weights():
             self.model = AutoModelForCausalLM.from_config(self.config)
             self.model.eval()
-            self.model = BetterTransformer.transform(self.model)  # enable flash attention
+            try:
+                self.model = BetterTransformer.transform(self.model)  # enable flash attention
+            except ValueError as ve:
+                print(f"new version of transfomer, no need to use BetterTransformer...")
             self.model.tie_weights()
 
         self.layers = [self.model.model.embed_tokens] + list(self.model.model.layers) + [self.model.model.norm,
@@ -252,6 +255,8 @@ class AirLLMLlama2(GenerationMixin):
 
                 t = time.process_time()
                 self.move_layer_to_device(state_dict)
+                if self.profiling_mode:
+                    torch.cuda.synchronize()
                 elapsed_time = time.process_time() - t
                 # profile
                 if self.profiling_mode:
@@ -312,12 +317,17 @@ class AirLLMLlama2(GenerationMixin):
                                 new_seq = layer(seq,
                                                 attention_mask=attention_mask[:, :, -len_seq:, -len_seq:])[0]
                             else:
-                                new_seq, (k_cache, v_cache) = layer(seq,
+                                layer_out = layer(seq,
                                                                     use_cache=True,
                                                                     attention_mask=attention_mask[:, :, -len_seq:,
                                                                                    -len_seq:])
-                                kv_cache_list[i][0].append(k_cache)
-                                kv_cache_list[i][1].append(v_cache)
+                                # TODO: adopt Cache mechanism in 4.36
+                                if layer_out[1] is not None:
+
+                                    #print(f"layer:{type(layer)} layer_out:{layer_out}")
+                                    new_seq, (k_cache, v_cache) = layer_out
+                                    kv_cache_list[i][0].append(k_cache)
+                                    kv_cache_list[i][1].append(v_cache)
 
                                 # print(f"k_cache size: {k_cache.shape}")
                                 # print(f"k_cache sizes: {[len(x[1]) for x in kv_cache_list]}")
@@ -363,6 +373,8 @@ class AirLLMLlama2(GenerationMixin):
             else:
                 # loading is async/lazy, so can't really distinguish them...
                 print(f"total disk+gpu loading time: {sum(total_disk_loading_time) + sum(total_gpu_loading_time):.04f}")
+                #print(f"total disk loading time: {sum(total_disk_loading_time):.04f}")
+                #print(f"total gpu loading time: {sum(total_gpu_loading_time):.04f}")
 
             print(f"total infer time(including all above plus gpu compute): {forward_elapsed_time:.04f}")
 
