@@ -262,79 +262,71 @@ class AirLLMLlama2(GenerationMixin):
                 # profile
                 if self.profiling_mode:
                     total_gpu_loading_time.append(elapsed_time)
-
+                
+                new_seq = None
                 # Run layer
 
                 for j, seq in enumerate(batch):
-
-                    if layer_name == "model.embed_tokens":
-                        batch[j] = layer(seq)
-                    elif layer_name == "model.norm":
-                        batch[j] = layer(seq[torch.arange(n_seq), batch_eos[j]][:, None])
-
-                        if output_attentions:
-                            all_hidden_states[i].append(batch[j])
-                    elif layer_name == "lm_head":
-                        batch[j] = layer(seq).float()
-                    else:
-
-                        if output_attentions:
-                            all_hidden_states[i].append(new_seq)
-
-                        if past_key_values is not None:
-                            # join past kv
-                            k_cache, v_cache = past_key_values[i - 1]
-                            len_p = past_key_values[0][0].shape[2]
-                            len_s = seq.shape[1]
-
-                            pos = position_ids[:, len_p:len_p + len_s]
-                            attn = attention_mask[:, :, -len_s:, -len_p - len_s:]
-                            kv_cache = (k_cache,
-                                        v_cache,
-                                        )
-
-                            layer_outputs = layer(seq,
-                                                  use_cache=True,
-                                                  output_attentions=output_attentions,
-                                                  past_key_value=kv_cache,
-                                                  position_ids=pos,
-                                                  attention_mask=attn
-                                                  )
-                            new_seq = layer_outputs[0]
+                    if seq is not None:  # Add this conditional check
+                        if layer_name == "model.embed_tokens":
+                            batch[j] = layer(seq)
+                        elif layer_name == "model.norm":
+                            batch[j] = layer(seq[torch.arange(n_seq), batch_eos[j]][:, None])
 
                             if output_attentions:
-                                all_self_attns[i].append(layer_outputs[1])
-
-                            if use_cache:
-                                (k_cache, v_cache) = layer_outputs[2 if output_attentions else 1]
-                                kv_cache_list[i][0].append(k_cache)
-                                kv_cache_list[i][1].append(v_cache)
-
-
+                                all_hidden_states[i].append(batch[j])
+                        elif layer_name == "lm_head":
+                            batch[j] = layer(seq).float()
                         else:
-                            len_seq = seq.shape[1]
+                            if output_attentions:
+                             all_hidden_states[i].append(new_seq)
 
-                            if not use_cache:
-                                new_seq = layer(seq,
-                                                attention_mask=attention_mask[:, :, -len_seq:, -len_seq:])[0]
-                            else:
-                                layer_out = layer(seq,
-                                                                    use_cache=True,
-                                                                    attention_mask=attention_mask[:, :, -len_seq:,
-                                                                                   -len_seq:])
-                                # TODO: adopt Cache mechanism in 4.36
-                                if layer_out[1] is not None:
+            if past_key_values is not None:
+                # join past kv
+                k_cache, v_cache = past_key_values[i - 1]
+                len_p = past_key_values[0][0].shape[2]
+                len_s = seq.shape[1]
 
-                                    #print(f"layer:{type(layer)} layer_out:{layer_out}")
-                                    new_seq, (k_cache, v_cache) = layer_out
-                                    kv_cache_list[i][0].append(k_cache)
-                                    kv_cache_list[i][1].append(v_cache)
+                pos = position_ids[:, len_p:len_p + len_s]
+                attn = attention_mask[:, :, -len_s:, -len_p - len_s:]
+                kv_cache = (k_cache, v_cache)
 
-                                # print(f"k_cache size: {k_cache.shape}")
-                                # print(f"k_cache sizes: {[len(x[1]) for x in kv_cache_list]}")
+                layer_outputs = layer(seq,
+                                      use_cache=True,
+                                      output_attentions=output_attentions,
+                                      past_key_value=kv_cache,
+                                      position_ids=pos,
+                                      attention_mask=attn
+                                      )
+                new_seq = layer_outputs[0]
 
-                        batch[j] = new_seq
+                if output_attentions:
+                    all_self_attns[i].append(layer_outputs[1])
 
+                if use_cache:
+                    (k_cache, v_cache) = layer_outputs[2 if output_attentions else 1]
+                    kv_cache_list[i][0].append(k_cache)
+                    kv_cache_list[i][1].append(v_cache)
+            else:
+                len_seq = seq.shape[1]
+
+                if not use_cache:
+                    new_seq = layer(seq,
+                                    attention_mask=attention_mask[:, :, -len_seq:, -len_seq:])[0]
+                else:
+                    layer_out = layer(seq,
+                                      use_cache=True,
+                                      attention_mask=attention_mask[:, :, -len_seq:,
+                                                     -len_seq:])
+                    if layer_out[1] is not None:
+                        new_seq, (k_cache, v_cache) = layer_out
+                        kv_cache_list[i][0].append(k_cache)
+                        kv_cache_list[i][1].append(v_cache)
+
+                    # print(f"k_cache size: {k_cache.shape}")
+                    # print(f"k_cache sizes: {[len(x[1]) for x in kv_cache_list]}")
+
+                batch[j] = new_seq
                 if output_hidden_states:
                     all_hidden_states += (torch.cat(batch, 0),)
 
