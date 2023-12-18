@@ -293,6 +293,20 @@ Some models are gated models, needs huggingface api token. You can provide hf_to
 model = AirLLMLlama2("meta-llama/Llama-2-7b-hf", #hf_token='HF_API_TOKEN')
 ```
 
+### 4. ValueError: Asking to pad but the tokenizer does not have a padding token.
+
+Some model's tokenizer doesn't have padding token, so you can set a padding token or simply turn the padding config off:
+
+ ```python
+input_tokens = model.tokenizer(input_text,
+    return_tensors="pt", 
+    return_attention_mask=False, 
+    truncation=True, 
+    max_length=MAX_LENGTH, 
+    padding=False  #<-----------   turn off padding 
+)
+```
+
 
 ## Contribution 
 
