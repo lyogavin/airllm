@@ -7,6 +7,8 @@ AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理�
 ## Updates
 
 
+[2023/12/18] added prefetching to overlap the model loading and compute. 10% speed improvement.
+
 [2023/12/03] added support of **ChatGLM**, **QWen**, **Baichuan**, **Mistral**, **InternLM**!
 
 支持ChatGLM, QWEN, Baichuan, Mistral, InternLM!
@@ -128,6 +130,7 @@ When initialize the model, we support the following configurations:
 * **profiling_mode**: supported options: True to output time consumptions or by default False
 * **layer_shards_saving_path**: optionally another path to save the splitted model
 * **hf_token**: huggingface token can be provided here if downloading gated models like: *meta-llama/Llama-2-7b-hf*
+* **prefetching**: prefetching to overlap the model loading and compute. By default turned on. For now only AirLLMLlama2 supports this.
 
 ### 5. Supported Models
 

@@ -8,8 +8,13 @@ from pathlib import Path
 from glob import glob
 import time
 
+from collections import OrderedDict, defaultdict
+from typing import Dict, List, Optional, Tuple, Union
+
 import torch
+import torch.nn as nn
 from safetensors.torch import load_file, save_file
+
 
 try:
     import bitsandbytes as bnb
@@ -107,7 +112,7 @@ def load_layer(local_path, layer_name, profiling=False):
 
     to_return = uncompress_layer_state_dict(layer_state_dict)
 
-    clean_memory()
+    #clean_memory()
 
     if profiling:
         elapsed_time = time.process_time() - t
@@ -338,4 +343,3 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
     # if splitted_model subdir exists under cache use it, otherwise split and save
     return Path(hf_cache_path), split_and_save_layers(hf_cache_path, layer_shards_saving_path,
                                                       compression=compression, layer_names=layer_names)
-
