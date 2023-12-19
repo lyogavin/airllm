@@ -2,7 +2,7 @@ import sys
 import unittest
 
 import torch
-#sys.path.insert(0, '../airllm')
+sys.path.insert(0, '../airllm')
 
 from auto_model import AutoModel
 
