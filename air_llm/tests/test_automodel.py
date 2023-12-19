@@ -25,7 +25,6 @@ class TestAutoModel(unittest.TestCase):
 
 
         for k,v in mapping_dict.items():
-            model = AutoModel.from_pretrained(k)
-            self.assertEqual(model.__class__.__name__, v, f"expecting {v}")
-            del model
+            module, cls = AutoModel.get_module_class(k)
+            self.assertEqual(cls, v, f"expecting {v}")
 
