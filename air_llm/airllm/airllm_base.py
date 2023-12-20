@@ -143,6 +143,11 @@ class AirLLMBaseModel(GenerationMixin):
 
         # model weights prefetch cuda stream
         self.prefetching = prefetching
+
+        if self.compression is not None:
+            self.prefetching = False
+            print(f"not support prefetching for compression for now. loading with no prepetching mode.")
+
         if prefetching:
             self.stream = torch.cuda.Stream()
         else:
@@ -265,13 +270,14 @@ class AirLLMBaseModel(GenerationMixin):
             state_dict = load_layer_output
 
         # pin memory:
-        t = time.time()
-        for k in state_dict.keys():
-            state_dict[k].pin_memory()
+        if self.prefetching:
+            t = time.time()
+            for k in state_dict.keys():
+                state_dict[k].pin_memory()
 
-        elapsed_time = time.time() - t
-        if self.profiling_mode:
-            self.profiler.add_profiling_time('pin_memory_to_trigger_load', elapsed_time)
+            elapsed_time = time.time() - t
+            if self.profiling_mode:
+                self.profiler.add_profiling_time('pin_memory_to_trigger_load', elapsed_time)
 
         return state_dict
 
