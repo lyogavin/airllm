@@ -135,7 +135,15 @@ When initialize the model, we support the following configurations:
 * **hf_token**: huggingface token can be provided here if downloading gated models like: *meta-llama/Llama-2-7b-hf*
 * **prefetching**: prefetching to overlap the model loading and compute. By default turned on. For now only AirLLMLlama2 supports this.
 
-### 5. Supported Models
+### 5. Example Python Notebook
+
+Example colabs here:
+
+<a target="_blank" href="https://colab.research.google.com/github/lyogavin/Anima/blob/main/air_llm/examples/run_all_types_of_models.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+
+### 6. Supported Models
 
 #### [HF open llm leaderboard](https://huggingface.co/spaces/HuggingFaceH4/open_llm_leaderboard) top models 
 
@@ -256,7 +264,7 @@ model.tokenizer.decode(generation_output.sequences[0])
 
 
 
-## Acknowledgement
+## 7. Acknowledgement
 
 A lot of the code are based on SimJeg's great work in the Kaggle exam competition. Big shoutout to SimJeg:
 
@@ -265,9 +273,9 @@ A lot of the code are based on SimJeg's great work in the Kaggle exam competitio
 [the associated discussion](https://www.kaggle.com/competitions/kaggle-llm-science-exam/discussion/446414).
 
 
-## FAQ
+## 8. FAQ
 
-### 1. MetadataIncompleteBuffer
+### 8.1. MetadataIncompleteBuffer
 
 safetensors_rust.SafetensorError: Error while deserializing header: MetadataIncompleteBuffer
 
@@ -275,7 +283,7 @@ If you run into this error, most possible cause is you run out of disk space. Th
 
 如果你碰到这个error，很有可能是空间不足。可以参考一下[这个](https://huggingface.co/TheBloke/guanaco-65B-GPTQ/discussions/12) 可能需要扩大硬盘空间，删除huggingface的[.cache](https://huggingface.co/docs/datasets/cache)，然后重新run。
 
-### 2. ValueError: max() arg is an empty sequence
+### 8.2. ValueError: max() arg is an empty sequence
 
 Most likely you are loading QWen or ChatGLM model with Llama2 class. Try the following:
 
@@ -293,7 +301,7 @@ from airllm import AutoModel #<----- instead of AirLLMLlama2
 AutoModel.from_pretrained(...)
 ```
 
-### 3. 401 Client Error....Repo model ... is gated.
+### 8.3. 401 Client Error....Repo model ... is gated.
 
 Some models are gated models, needs huggingface api token. You can provide hf_token:
 
@@ -301,7 +309,7 @@ Some models are gated models, needs huggingface api token. You can provide hf_to
 model = AutoModel.from_pretrained("meta-llama/Llama-2-7b-hf", #hf_token='HF_API_TOKEN')
 ```
 
-### 4. ValueError: Asking to pad but the tokenizer does not have a padding token.
+### 8.4. ValueError: Asking to pad but the tokenizer does not have a padding token.
 
 Some model's tokenizer doesn't have padding token, so you can set a padding token or simply turn the padding config off:
 
