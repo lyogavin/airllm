@@ -20,20 +20,20 @@ class AutoModel:
         config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True)
 
         if "QWen" in config.architectures[0]:
-            return ".airllm_qwen", "AirLLMQWen"
+            return "airllm", "AirLLMQWen"
         elif "Baichuan" in config.architectures[0]:
-            return ".airllm_baichuan", "AirLLMBaichuan"
+            return "airllm", "AirLLMBaichuan"
         elif "ChatGLM" in config.architectures[0]:
-            return ".airllm_chatglm", "AirLLMChatGLM"
+            return "airllm", "AirLLMChatGLM"
         elif "InternLM" in config.architectures[0]:
-            return ".airllm_internlm", "AirLLMInternLM"
+            return "airllm", "AirLLMInternLM"
         elif "Mistral" in config.architectures[0]:
-            return ".airllm_mistral", "AirLLMMistral"
+            return "airllm", "AirLLMMistral"
         elif "Llama" in config.architectures[0]:
-            return ".airllm", "AirLLMLlama2"
+            return "airllm", "AirLLMLlama2"
         else:
             print(f"unknown artichitecture: {config.architectures[0]}, try to use Llama2...")
-            return ".airllm", "AirLLMLlama2"
+            return "airllm", "AirLLMLlama2"
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *inputs, **kwargs):

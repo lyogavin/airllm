@@ -6,8 +6,11 @@ AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理�
 
 ## Updates
 
+[2023/12/20] v2.6: Added AutoModel, automatically detect model type, no need to provide model class to initialize model.
 
-[2023/12/18] added prefetching to overlap the model loading and compute. 10% speed improvement.
+提供AuoModel，自动根据repo参数检测模型类型，自动初始化模型。
+
+[2023/12/18] v2.5: added prefetching to overlap the model loading and compute. 10% speed improvement.
 
 [2023/12/03] added support of **ChatGLM**, **QWen**, **Baichuan**, **Mistral**, **InternLM**!
 
@@ -55,14 +58,14 @@ Then, initialize AirLLMLlama2, pass in the huggingface repo ID of the model bein
 *如果需要指定另外的路径来存储分层的模型可以在初始化AirLLMLlama2是传入参数：**layer_shards_saving_path**。*)
 
 ```python
-from airllm import AirLLMLlama2
+from airllm import AutoModel
 
 MAX_LENGTH = 128
 # could use hugging face model repo id:
-model = AirLLMLlama2("garage-bAInd/Platypus2-70B-instruct")
+model = AutoModel.from_pretrained("garage-bAInd/Platypus2-70B-instruct")
 
 # or use model's local path...
-#model = AirLLMLlama2("/home/ubuntu/.cache/huggingface/hub/models--garage-bAInd--Platypus2-70B-instruct/snapshots/b585e74bcaae02e52665d9ac6d23f4d0dbc81a0f")
+#model = AutoModel.from_pretrained("/home/ubuntu/.cache/huggingface/hub/models--garage-bAInd--Platypus2-70B-instruct/snapshots/b585e74bcaae02e52665d9ac6d23f4d0dbc81a0f")
 
 input_text = [
         'What is the capital of United States?',
@@ -74,7 +77,7 @@ input_tokens = model.tokenizer(input_text,
     return_attention_mask=False, 
     truncation=True, 
     max_length=MAX_LENGTH, 
-    padding=True)
+    padding=False)
            
 generation_output = model.generate(
     input_tokens['input_ids'].cuda(), 
@@ -109,7 +112,7 @@ We just added model compression based on block-wise quantization based model com
 * Step 3. when initialize the model, passing the argument compression ('4bit' or '8bit'):
 
 ```python
-model = AirLLMLlama2("garage-bAInd/Platypus2-70B-instruct",
+model = AutoModel.from_pretrained("garage-bAInd/Platypus2-70B-instruct",
                      compression='4bit' # specify '8bit' for 8-bit block-wise quantization 
                     )
 ```
@@ -184,9 +187,9 @@ When initialize the model, we support the following configurations:
 * ChatGLM:
 
 ```python
-from airllm import AirLLMChatGLM
+from airllm import AutoModel
 MAX_LENGTH = 128
-model = AirLLMChatGLM("THUDM/chatglm3-6b-base")
+model = AutoModel.from_pretrained("THUDM/chatglm3-6b-base")
 input_text = ['What is the capital of China?',]
 input_tokens = model.tokenizer(input_text,
     return_tensors="pt", 
@@ -205,9 +208,9 @@ model.tokenizer.decode(generation_output.sequences[0])
 * QWen:
 
 ```python
-from airllm import AirLLMQWen
+from airllm import AutoModel
 MAX_LENGTH = 128
-model = AirLLMQWen("Qwen/Qwen-7B")
+model = AutoModel.from_pretrained("Qwen/Qwen-7B")
 input_text = ['What is the capital of China?',]
 input_tokens = model.tokenizer(input_text,
     return_tensors="pt", 
@@ -226,11 +229,11 @@ model.tokenizer.decode(generation_output.sequences[0])
 * Baichuan, InternLM, Mistral, etc:
 
 ```python
-from airllm import AirLLMBaichuan # AirLLMInternLM, AirLLMMistral
+from airllm import AutoModel
 MAX_LENGTH = 128
-model = AirLLMBaichuan("baichuan-inc/Baichuan2-7B-Base")
-#model = AirLLMInternLM("internlm/internlm-20b")
-#model = AirLLMMistral("mistralai/Mistral-7B-Instruct-v0.1")
+model = AutoModel.from_pretrained("baichuan-inc/Baichuan2-7B-Base")
+#model = AutoModel.from_pretrained("internlm/internlm-20b")
+#model = AutoModel.from_pretrained("mistralai/Mistral-7B-Instruct-v0.1")
 input_text = ['What is the capital of China?',]
 input_tokens = model.tokenizer(input_text,
     return_tensors="pt", 
@@ -279,13 +282,15 @@ Most likely you are loading QWen or ChatGLM model with Llama2 class. Try the fol
 For QWen model: 
 
 ```python
-from airllm import AirLLMQWen #<----- instead of AirLLMLlama2
+from airllm import AutoModel #<----- instead of AirLLMLlama2
+AutoModel.from_pretrained(...)
 ```
 
 For ChatGLM model: 
 
 ```python
-from airllm import AirLLM ChatGLM #<----- instead of AirLLMLlama2
+from airllm import AutoModel #<----- instead of AirLLMLlama2
+AutoModel.from_pretrained(...)
 ```
 
 ### 3. 401 Client Error....Repo model ... is gated.
@@ -293,7 +298,7 @@ from airllm import AirLLM ChatGLM #<----- instead of AirLLMLlama2
 Some models are gated models, needs huggingface api token. You can provide hf_token:
 
 ```python
-model = AirLLMLlama2("meta-llama/Llama-2-7b-hf", #hf_token='HF_API_TOKEN')
+model = AutoModel.from_pretrained("meta-llama/Llama-2-7b-hf", #hf_token='HF_API_TOKEN')
 ```
 
 ### 4. ValueError: Asking to pad but the tokenizer does not have a padding token.

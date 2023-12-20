@@ -4,5 +4,7 @@ from .airllm_qwen import AirLLMQWen
 from .airllm_baichuan import AirLLMBaichuan
 from .airllm_internlm import AirLLMInternLM
 from .airllm_mistral import AirLLMMistral
+from .airllm_base import AirLLMBaseModel
+from .auto_model import AutoModel
 from .utils import split_and_save_layers
 from .utils import NotEnoughSpaceException
