@@ -6,6 +6,8 @@ AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理�
 
 ## Updates
 
+[2023/12/20] v2.7: Support AirLLMMixtral. 
+
 [2023/12/20] v2.6: Added AutoModel, automatically detect model type, no need to provide model class to initialize model.
 
 提供AuoModel，自动根据repo参数检测模型类型，自动初始化模型。
@@ -165,6 +167,7 @@ Example colabs here:
 | 9 | jondurbin/airoboros-l2-70b-2.2.1  | ✅ | AirLLMLlama2 |
 | 10 | chargoddard/Yi-34B-Llama  | ✅ | AirLLMLlama2 |
 | ？ | mistralai/Mistral-7B-Instruct-v0.1  | ✅ | AirLLMMistral |
+| ？ | mistralai/Mixtral-8x7B-v0.1 | ✅ | AirLLMMixtral |
 
 
 #### [opencompass leaderboard](https://opencompass.org.cn/leaderboard-llm) top models

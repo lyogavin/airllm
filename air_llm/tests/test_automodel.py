@@ -20,7 +20,8 @@ class TestAutoModel(unittest.TestCase):
             'internlm/internlm-chat-7b': 'AirLLMInternLM',
             'THUDM/chatglm3-6b-base': 'AirLLMChatGLM',
             'baichuan-inc/Baichuan2-7B-Base': 'AirLLMBaichuan',
-            'mistralai/Mistral-7B-Instruct-v0.1': 'AirLLMMistral'
+            'mistralai/Mistral-7B-Instruct-v0.1': 'AirLLMMistral',
+            'mistralai/Mixtral-8x7B-v0.1': 'AirLLMMixtral'
         }
 
 

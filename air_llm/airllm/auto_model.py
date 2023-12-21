@@ -1,13 +1,6 @@
 import importlib
 from transformers import AutoConfig
 
-from .airllm import AirLLMLlama2
-from .airllm_mistral import AirLLMMistral
-from .airllm_baichuan import AirLLMBaichuan
-from .airllm_internlm import AirLLMInternLM
-from .airllm_chatglm import AirLLMChatGLM
-from .airllm_qwen import AirLLMQWen
-
 
 class AutoModel:
     def __init__(self):
@@ -33,6 +26,8 @@ class AutoModel:
             return "airllm", "AirLLMInternLM"
         elif "Mistral" in config.architectures[0]:
             return "airllm", "AirLLMMistral"
+        elif "Mixtral" in config.architectures[0]:
+            return "airllm", "AirLLMMixtral"
         elif "Llama" in config.architectures[0]:
             return "airllm", "AirLLMLlama2"
         else:
@@ -43,7 +38,6 @@ class AutoModel:
     def from_pretrained(cls, pretrained_model_name_or_path, *inputs, **kwargs):
 
         module, cls = AutoModel.get_module_class(pretrained_model_name_or_path, *inputs, **kwargs)
-
         module = importlib.import_module(module)
         class_ = getattr(module, cls)
         return class_(pretrained_model_name_or_path, *inputs, ** kwargs)
