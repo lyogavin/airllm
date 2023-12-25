@@ -309,7 +309,7 @@ A lot of the code are based on SimJeg's great work in the Kaggle exam competitio
 
 ## FAQ
 
-### 8.1. MetadataIncompleteBuffer
+### 1. MetadataIncompleteBuffer
 
 safetensors_rust.SafetensorError: Error while deserializing header: MetadataIncompleteBuffer
 
@@ -317,7 +317,7 @@ If you run into this error, most possible cause is you run out of disk space. Th
 
 如果你碰到这个error，很有可能是空间不足。可以参考一下[这个](https://huggingface.co/TheBloke/guanaco-65B-GPTQ/discussions/12) 可能需要扩大硬盘空间，删除huggingface的[.cache](https://huggingface.co/docs/datasets/cache)，然后重新run。
 
-### 8.2. ValueError: max() arg is an empty sequence
+### 2. ValueError: max() arg is an empty sequence
 
 Most likely you are loading QWen or ChatGLM model with Llama2 class. Try the following:
 
@@ -335,7 +335,7 @@ from airllm import AutoModel #<----- instead of AirLLMLlama2
 AutoModel.from_pretrained(...)
 ```
 
-### 8.3. 401 Client Error....Repo model ... is gated.
+### 3. 401 Client Error....Repo model ... is gated.
 
 Some models are gated models, needs huggingface api token. You can provide hf_token:
 
@@ -343,7 +343,7 @@ Some models are gated models, needs huggingface api token. You can provide hf_to
 model = AutoModel.from_pretrained("meta-llama/Llama-2-7b-hf", #hf_token='HF_API_TOKEN')
 ```
 
-### 8.4. ValueError: Asking to pad but the tokenizer does not have a padding token.
+### 4. ValueError: Asking to pad but the tokenizer does not have a padding token.
 
 Some model's tokenizer doesn't have padding token, so you can set a padding token or simply turn the padding config off:
 
