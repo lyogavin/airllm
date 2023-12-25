@@ -418,8 +418,8 @@ class AirLLMBaseModel(GenerationMixin):
                 future = executor.submit(self.load_layer_to_cpu, self.layer_names[0])
 
 
-            for i, (layer_name, layer) in tqdm(enumerate(zip(self.layer_names, self.layers)), desc=self.running_device,
-                                               desc='running layers:',
+            for i, (layer_name, layer) in tqdm(enumerate(zip(self.layer_names, self.layers)),
+                                               desc=f'running layers(self.running_device)',
                                                total=len(self.layers)):
 
                 if self.prefetching:
