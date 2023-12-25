@@ -10,10 +10,19 @@ import time
 
 from collections import OrderedDict, defaultdict
 from typing import Dict, List, Optional, Tuple, Union
+from sys import platform
+
+is_on_mac_os = False
+
+if platform == "darwin":
+    is_on_mac_os = True
+
 
 import torch
 import torch.nn as nn
 from safetensors.torch import load_file, save_file
+
+from .persist import ModelPersister
 
 
 try:
@@ -25,7 +34,6 @@ except ImportError:
 
 
 import huggingface_hub
-
 
 
 # replacement for bnb quantstat.as_dict(True), until the bug is fixed....
@@ -105,7 +113,8 @@ def uncompress_layer_state_dict(layer_state_dict):
     return layer_state_dict if uncompressed_layer_state_dict is None else uncompressed_layer_state_dict
 
 def load_layer(local_path, layer_name, profiling=False):
-    layer_state_dict = load_file(Path(local_path) / (layer_name + ".safetensors"), device="cpu")
+    #layer_state_dict = load_file(Path(local_path) / (layer_name + ".safetensors"), device="cpu")
+    layer_state_dict = ModelPersister.get_model_persister().load_model(layer_name, local_path)
 
     if profiling:
         t = time.process_time()
@@ -216,22 +225,10 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     #print(f"checking exists: {saving_path}")
     if os.path.exists(saving_path):
         # dir already exists, check if all layer files are there
-        files_in_saving_path = glob(str(saving_path / "*.safetensors"))
-        done_files_in_saving_path = glob(str(saving_path / "*.safetensors.done"))
 
         found_layers = {}
         for layer in layers:
-
-            found_safetensor_file = [layer+'safetensors' in file_in_saving_path for file_in_saving_path in files_in_saving_path]
-            #print(layer)
-            #print(found_safetensor_file)
-            found_safetensor_file = any(found_safetensor_file)
-
-            found_done_file = [layer+'safetensors.done' in file_in_saving_path for file_in_saving_path in done_files_in_saving_path]
-            #print(found_done_file)
-            found_done_file = any(found_done_file)
-
-            found_layers[layer] = found_safetensor_file and found_done_file
+            found_layers[layer] = ModelPersister.get_model_persister().model_persist_exist(layer, saving_path)
 
 
         if all(found_layers.values()):
@@ -278,15 +275,11 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
 
         # Save layer state dict as using safetensors
-        safetensor_exists = os.path.exists(str(saving_path / (layer + 'safetensors')))
-        done_marker_exists = os.path.exists(str(saving_path / (layer + 'safetensors.done')))
-        if (not safetensor_exists) or (not done_marker_exists):
-            save_file(layer_state_dict, saving_path / (layer + 'safetensors'))
 
-            print(f"saved as: {saving_path / (layer + 'safetensors')}")
+        marker_exists = ModelPersister.get_model_persister().model_persist_exist(layer, saving_path)
+        if not marker_exists:
+            ModelPersister.get_model_persister().persist_model(layer_state_dict, layer, saving_path)
 
-            # set done marker
-            (saving_path / (layer + 'safetensors.done')).touch()
 
         # Free memory
         for k in layer_state_dict.keys():
@@ -332,10 +325,19 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
                 f"Found local directory in {model_local_path_or_repo_id}, but didn't find downloaded model. Try using {model_local_path_or_repo_id} as a HF repo...")
 
     # it should be a repo id at this point...
-    if hf_token is not None:
-        hf_cache_path = huggingface_hub.snapshot_download(model_local_path_or_repo_id, token=hf_token)
+
+    # check if there's safetensors saved, if so, exclude torch saves
+    hf_cache_path = huggingface_hub.snapshot_download(model_local_path_or_repo_id, token=hf_token, allow_patterns="model.safetensors.index.json")
+
+    if len(glob(str(Path(hf_cache_path) / "model.safetensors.index.json"))) > 0:
+        # there's safe tensor version, exclude torch version
+        hf_cache_path = huggingface_hub.snapshot_download(model_local_path_or_repo_id, token=hf_token,
+                                                          ignore_patterns=['pytorch_model.bin.index.json', '*.bin'])
+
     else:
-        hf_cache_path = huggingface_hub.snapshot_download(model_local_path_or_repo_id)
+        hf_cache_path = huggingface_hub.snapshot_download(model_local_path_or_repo_id,
+                                                          token=hf_token)
+
     assert os.path.exists(Path(hf_cache_path) / 'pytorch_model.bin.index.json') or \
            os.path.exists(Path(hf_cache_path) / 'model.safetensors.index.json'), \
            f"{hf_cache_path}/pytorch_model.bin.index.json or {hf_cache_path}/model.safetensors.index.json should exists."

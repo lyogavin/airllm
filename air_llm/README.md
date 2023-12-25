@@ -6,6 +6,10 @@ AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理�
 
 ## Updates
 
+[2023/12/25] v2.8: Support MacOS running 70B large language models.
+
+支持苹果系统运行70B大模型！
+
 [2023/12/20] v2.7: Support AirLLMMixtral. 
 
 [2023/12/20] v2.6: Added AutoModel, automatically detect model type, no need to provide model class to initialize model.
@@ -30,7 +34,16 @@ airllm2.0。支持模型压缩，速度提升3倍。
 
 airllm发布。
 
+## Table of Contents
 
+* [Quick start](#quickstart)
+* [Model Compression](#3-model-compression---3x-inference-speed-up)
+* [Configurations](#configurations)
+* [Run on MacOS](#macos)
+* [Example notebooks](#example-python-notebook)
+* [Supported Models](#supported-models)
+* [Acknowledgement](#acknowledgement)
+* [FAQ](#faq)
 
 ## Quickstart
 
@@ -99,7 +112,7 @@ Note: During inference, the original model will first be decomposed and saved la
 注意：推理过程会首先将原始模型按层分拆，转存。请保证huggingface cache目录有足够的磁盘空间。
 
 
-### 3. Model Compression - 3x Inference Speed Up!
+## Model Compression - 3x Inference Speed Up!
 
 We just added model compression based on block-wise quantization based model compression. Which can further **speed up the inference speed** for up to **3x** , with **almost ignorable accuracy loss!** (see more performance evaluation and why we use block-wise quantization in [this paper](https://arxiv.org/abs/2212.09720))
 
@@ -125,7 +138,7 @@ Quantization normally needs to quantize both weights and activations to really s
 
 While in our case the bottleneck is mainly at the disk loading, we only need to make the model loading size smaller. So we get to only quantize the weights part, which is easier to ensure the accuracy.
 
-### 4. Configurations
+## Configurations
  
 When initialize the model, we support the following configurations:
 
@@ -137,7 +150,18 @@ When initialize the model, we support the following configurations:
 * **hf_token**: huggingface token can be provided here if downloading gated models like: *meta-llama/Llama-2-7b-hf*
 * **prefetching**: prefetching to overlap the model loading and compute. By default turned on. For now only AirLLMLlama2 supports this.
 
-### 5. Example Python Notebook
+## MacOS
+
+Just install airllm and run the code the same as on linux. See more in [Quick Start](#uickstart).
+
+* make sure you installed [mlx](https://github.com/ml-explore/mlx?tab=readme-ov-file#installation) and torch
+* you probabaly need to install python native see more [here](https://stackoverflow.com/a/65432861/21230266)
+* only [Apple silicon](https://support.apple.com/en-us/HT211814) is supported
+
+Example [python notebook](https://github.com/lyogavin/Anima/blob/main/air_llm/examples/run_on_macos.ipynb)
+
+
+## Example Python Notebook
 
 Example colabs here:
 
@@ -145,7 +169,7 @@ Example colabs here:
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
-### 6. Supported Models
+## Supported Models
 
 #### [HF open llm leaderboard](https://huggingface.co/spaces/HuggingFaceH4/open_llm_leaderboard) top models 
 
@@ -267,7 +291,7 @@ model.tokenizer.decode(generation_output.sequences[0])
 
 
 
-## 7. Acknowledgement
+## Acknowledgement
 
 A lot of the code are based on SimJeg's great work in the Kaggle exam competition. Big shoutout to SimJeg:
 
@@ -276,7 +300,7 @@ A lot of the code are based on SimJeg's great work in the Kaggle exam competitio
 [the associated discussion](https://www.kaggle.com/competitions/kaggle-llm-science-exam/discussion/446414).
 
 
-## 8. FAQ
+## FAQ
 
 ### 8.1. MetadataIncompleteBuffer
 

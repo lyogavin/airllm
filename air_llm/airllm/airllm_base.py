@@ -155,7 +155,12 @@ class AirLLMBaseModel(GenerationMixin):
 
     # if derived class needs to create generation config differently, like Mistrial, this function can be overridden
     def get_generation_config(self):
-        return GenerationConfig.from_pretrained(self.model_local_path)
+        # protective on generation config
+
+        try:
+            return GenerationConfig.from_pretrained(self.model_local_path)
+        except Exception as e:
+            return GenerationConfig()
 
     # a chance to customize tokenizer
     def get_tokenizer(self, hf_token=None):
@@ -414,6 +419,7 @@ class AirLLMBaseModel(GenerationMixin):
 
 
             for i, (layer_name, layer) in tqdm(enumerate(zip(self.layer_names, self.layers)), desc=self.running_device,
+                                               desc='running layers:',
                                                total=len(self.layers)):
 
                 if self.prefetching:
