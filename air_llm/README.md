@@ -6,7 +6,7 @@ AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理�
 
 ## Updates
 
-[2023/12/25] v2.8: Support MacOS running 70B large language models.
+[2023/12/25] v2.8.2: Support MacOS running 70B large language models.
 
 支持苹果系统运行70B大模型！
 
