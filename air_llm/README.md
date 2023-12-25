@@ -1,8 +1,15 @@
 ![airllm_logo](https://github.com/lyogavin/Anima/blob/main/assets/airllm_logo_sm.png?v=3&raw=true)
 
+[**Quickstart**](#quickstart) | 
+[**Configurations**](#configurations) | 
+[**MacOS**](#macos) | 
+[**Example notebooks**](#example-python-notebook) | 
+[**FAQ**](#faq)
+
 **AirLLM** optimizes inference memory usage, allowing 70B large language models to run inference on a single 4GB GPU card. No quantization, distillation, pruning or other model compression techniques that would result in degraded model performance are needed.
 
 AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理。不需要任何损失模型性能的量化和蒸馏，剪枝等模型压缩。
+
 
 ## Updates
 
@@ -349,6 +356,23 @@ input_tokens = model.tokenizer(input_text,
     padding=False  #<-----------   turn off padding 
 )
 ```
+
+## Citing AirLLM
+
+If you find
+AirLLM useful in your research and wish to cite it, please use the following
+BibTex entry:
+
+```
+@software{airllm2023,
+  author = {Gavin Li},
+  title = {AirLLM: scaling large language models on low-end commodity computers},
+  url = {https://github.com/lyogavin/Anima/tree/main/air_llm},
+  version = {0.0},
+  year = {2023},
+}
+```
+
 
 
 ## Contribution 
