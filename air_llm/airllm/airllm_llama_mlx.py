@@ -295,7 +295,7 @@ class AirLLMLlamaMlx:
         self.record_memory('after_tok_embeddings')
         #for l in self.layers:
 
-        for il in tqdm(range(self.model_args.n_layers), desc='running layers:'):
+        for il in tqdm(range(self.model_args.n_layers), desc='running layers'):
             self.record_memory(f'before layer {il}')
             l = TransformerBlock(args=self.model_args)
             l.update(
@@ -381,7 +381,7 @@ class AirLLMLlamaMlx:
                 gc.collect()
             self.record_memory('after_tok_embeddings')
 
-            for i in tqdm(range(len(cache)), desc='running layers:'):
+            for i in tqdm(range(len(cache)), desc='running layers'):
                 self.record_memory(f'before layer {il}')
                 # We are overwriting the arrays in the cache list. When
                 # the computation will happen, MLX will be discarding the

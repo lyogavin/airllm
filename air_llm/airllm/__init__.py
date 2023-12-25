@@ -7,6 +7,7 @@ if platform == "darwin":
 
 if is_on_mac_os:
     from .airllm_llama_mlx import AirLLMLlamaMlx
+    from .auto_model import AutoModel
 else:
     from .airllm import AirLLMLlama2
     from .airllm_chatglm import AirLLMChatGLM
