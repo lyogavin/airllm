@@ -37,7 +37,7 @@ airllm发布。
 ## Table of Contents
 
 * [Quick start](#quickstart)
-* [Model Compression](#3-model-compression---3x-inference-speed-up)
+* [Model Compression](#model-compression---3x-inference-speed-up)
 * [Configurations](#configurations)
 * [Run on MacOS](#macos)
 * [Example notebooks](#example-python-notebook)
