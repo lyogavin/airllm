@@ -202,17 +202,22 @@ class AirLLMLlamaMlx:
         else:
             self.least_available = min(available, self.least_available)
 
-        print(f"[{msg}] - available mem: {available:.02}mb, least available:{available:.02}mb")
+        consumed = self.initial_available - available
+        max_consumed = self.initial_available - self.least_available
+
+        print(f"[{msg}] - available mem: {available:.02f}mb, consumed: {consumed:.02f}mb, least available:{available:.02f}mb, max consumed: {max_consumed:.02f}mb")
 
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
-                 hf_token=None, prefetching=True, test_nonlayered=False, show_memory_util=False):
+                 hf_token=None, prefetching=True, test_nonlayered=False, show_memory_util=False,
+                 delete_original=False):
 
         self.hf_token = hf_token
         self.set_layer_names_dict()
         self.test_nonlayered = test_nonlayered
         self.show_memory_util = show_memory_util
         self.least_available = None
+        self.initial_available = psutil.virtual_memory().available / 1024 / 1024
 
 
 
@@ -220,7 +225,8 @@ class AirLLMLlamaMlx:
                                                                                          layer_shards_saving_path,
                                                                                          compression=compression,
                                                                                          layer_names=self.layer_names_dict,
-                                                                                         hf_token=hf_token)
+                                                                                         hf_token=hf_token,
+                                                                                         delete_original=delete_original)
         if hf_token is not None:
             self.config = AutoConfig.from_pretrained(self.model_local_path, token=hf_token, trust_remote_code=True)
         else:
