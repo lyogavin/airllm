@@ -54,9 +54,9 @@ airllm发布。
 
 ## Quickstart
 
-### 1. install package
+### 1. Install package
 
-First, install airllm pip package.
+First, install the airllm pip package.
 
 首先安装airllm包。
 
@@ -127,7 +127,7 @@ We just added model compression based on block-wise quantization based model com
 
 ![speed_improvement](https://github.com/lyogavin/Anima/blob/main/assets/airllm2_time_improvement.png?v=2&raw=true)
 
-#### how to enalbe model compression speed up:
+#### How to enable model compression speed up:
 
 * Step 1. make sure you have [bitsandbytes](https://github.com/TimDettmers/bitsandbytes) installed by `pip install -U bitsandbytes `
 * Step 2. make sure airllm verion later than 2.0.0: `pip install -U airllm` 
@@ -139,7 +139,7 @@ model = AutoModel.from_pretrained("garage-bAInd/Platypus2-70B-instruct",
                     )
 ```
 
-#### how model compression here is different from quantization?
+#### What is the differences between model compression and quantization?
 
 Quantization normally needs to quantize both weights and activations to really speed things up. Which makes it harder to maintain accuracy and avoid the impact of outliers in all kinds of inputs.
 
