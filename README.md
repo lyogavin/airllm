@@ -66,7 +66,7 @@ Find out more [Here](https://github.com/lyogavin/Anima/tree/main/air_llm)。
 
 Train your own SORA:
 
-Check out here: [[https://github.com/lyogavin/Latte_t2v](https://github.com/lyogavin/train_your_own_sora)](https://github.com/lyogavin/train_your_own_sora)
+Check out here: [https://github.com/lyogavin/train_your_own_sora](https://github.com/lyogavin/train_your_own_sora)
 
 ## 100K context length LLM
 
