@@ -34,7 +34,7 @@ This is the first open source 33B Chinese LLM, we also support DPO alignment tra
 
 [2024/03/07] Open source: Latte text2video Training - Train your own SORA!
 
-最接近SORA的开源模型来了！训练你自己的SORA
+最接近SORA的开源模型来了！[训练你自己的SORA](https://github.com/lyogavin/train_your_own_sora)
 
 [2023/11/17] Open source: AirLLM, inference 70B LLM with 4GB single GPU.
 
@@ -64,7 +64,7 @@ Find out more [Here](https://github.com/lyogavin/Anima/tree/main/air_llm)。
 
 ##  Train your own SORA: Open source: Latte text2video Training
 
-Check out here: [https://github.com/lyogavin/Latte_t2v](https://github.com/lyogavin/Latte_t2v)
+Check out here: [https://github.com/lyogavin/Latte_t2v](https://github.com/lyogavin/train_your_own_sora)
 
 ## 100K context length LLM
 
