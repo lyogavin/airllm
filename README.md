@@ -31,6 +31,9 @@ This is the first open source 33B Chinese LLM, we also support DPO alignment tra
 
 ## 🔄 更新 Updates
 
+[2024/04/20] AirLLM supports Llama3 natively already. Run Llama3 70B on 4GB single GPU.
+
+AirLLM天然支持Llama3 70B。4GB显存运行Llama3 70B大模型。
 
 [2024/03/07] Open source: Latte text2video Training - Train your own SORA!
 
