@@ -13,6 +13,10 @@ AirLLM优化inference内存，4GB单卡GPU可以运行70B大语言模型推理�
 
 ## Updates
 
+[2024/04/20] AirLLM supports Llama3 natively already. Run Llama3 70B on 4GB single GPU.
+
+AirLLM天然支持Llama3 70B。4GB显存运行Llama3 70B大模型。
+
 [2023/12/25] v2.8.2: Support MacOS running 70B large language models.
 
 支持苹果系统运行70B大模型！
