@@ -164,7 +164,7 @@ When initialize the model, we support the following configurations:
 
 ## MacOS
 
-Just install airllm and run the code the same as on linux. See more in [Quick Start](#uickstart).
+Just install airllm and run the code the same as on linux. See more in [Quick Start](#quickstart).
 
 * make sure you installed [mlx](https://github.com/ml-explore/mlx?tab=readme-ov-file#installation) and torch
 * you probabaly need to install python native see more [here](https://stackoverflow.com/a/65432861/21230266)
