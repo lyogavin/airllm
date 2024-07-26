@@ -2,9 +2,9 @@
 
 ![Animaロゴ](https://github.com/lyogavin/Anima/blob/main/anima_logo.png?raw=true)
 
-最初のQLoRAベースの33B完全オープンソースの日本語LLM
+最初のQLoRAベースの33B完全オープンソースの中国語LLM
 
-*この内容を[英語](README_en.md)で読む。*
+*この内容を[中国語](README.md)で読む。この内容を[英語](README_en.md)で読む。*
 
 
 <div align="left">
