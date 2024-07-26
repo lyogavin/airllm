@@ -5,6 +5,7 @@
 The First QLoRA based 33B fully open-source Chinese LLM
 
 *Read this in [Chinese](README.md).*
+*Read this in [Japanese](README_ja.md).*
 
 
 <div align="left">
