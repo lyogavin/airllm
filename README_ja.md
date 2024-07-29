@@ -1,6 +1,6 @@
 # Anima
 
-![Animaロゴ](https://github.com/lyogavin/Anima/blob/main/anima_logo.png?raw=true)
+![Animaロゴ](https://github.com/lyogavin/airllm/blob/main/anima_logo.png?raw=true)
 
 最初のQLoRAベースの33B完全オープンソースの中国語LLM
 
