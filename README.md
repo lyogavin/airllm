@@ -13,6 +13,7 @@ This is the first open source 33B Chinese LLM, we also support DPO alignment tra
 
 
 *Read this in [English](README_en.md).*
+*Read this in [Japanese](README_ja.md).*
 
 <div align="left">
 
