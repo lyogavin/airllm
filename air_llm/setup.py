@@ -5,13 +5,13 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="airllm",
-    version="2.8.3",
+    version="2.8.6",
     author="Gavin Li",
     author_email="gavinli@animaai.cloud",
     description="AirLLM allows single 4GB GPU card to run 70B large language models without quantization, distillation or pruning.",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/lyogavin/Anima/tree/main/air_llm",
+    url="https://github.com/lyogavin/airllm",
     packages=setuptools.find_packages(),
     install_requires=[
         'tqdm',
