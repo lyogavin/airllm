@@ -92,7 +92,7 @@ Then, initialize AirLLMLlama2, pass in the huggingface repo ID of the model bein
 
 然后，初始化AirLLMLlama2，传入所使用模型的huggingface repo ID，或者本地路径即可类似于普通的transformer模型进行推理。
 
-(*You can can also specify the path to save the splitted layered model through **layer_shards_saving_path** when init AirLLMLlama2.*
+(*You can also specify the path to save the splitted layered model through **layer_shards_saving_path** when init AirLLMLlama2.*
 
 *如果需要指定另外的路径来存储分层的模型可以在初始化AirLLMLlama2是传入参数：**layer_shards_saving_path**。*)
 
@@ -138,7 +138,7 @@ Note: During inference, the original model will first be decomposed and saved la
 
 ## Model Compression - 3x Inference Speed Up!
 
-We just added model compression based on block-wise quantization based model compression. Which can further **speed up the inference speed** for up to **3x** , with **almost ignorable accuracy loss!** (see more performance evaluation and why we use block-wise quantization in [this paper](https://arxiv.org/abs/2212.09720))
+We just added model compression based on block-wise quantization-based model compression. Which can further **speed up the inference speed** for up to **3x** , with **almost ignorable accuracy loss!** (see more performance evaluation and why we use block-wise quantization in [this paper](https://arxiv.org/abs/2212.09720))
 
 我们增加了基于block-wise quantization的模型压缩，推理速度提升3倍几乎没有精度损失。精度评测可以参考此paper：[this paper](https://arxiv.org/abs/2212.09720)
 
@@ -156,11 +156,11 @@ model = AutoModel.from_pretrained("garage-bAInd/Platypus2-70B-instruct",
                     )
 ```
 
-#### What is the differences between model compression and quantization?
+#### What are the differences between model compression and quantization?
 
 Quantization normally needs to quantize both weights and activations to really speed things up. Which makes it harder to maintain accuracy and avoid the impact of outliers in all kinds of inputs.
 
-While in our case the bottleneck is mainly at the disk loading, we only need to make the model loading size smaller. So we get to only quantize the weights part, which is easier to ensure the accuracy.
+While in our case the bottleneck is mainly at the disk loading, we only need to make the model loading size smaller. So, we get to only quantize the weights' part, which is easier to ensure the accuracy.
 
 ## Configurations
  
@@ -168,11 +168,11 @@ When initialize the model, we support the following configurations:
 
 初始化model的时候，可以指定以下的配置参数：
 
-* **compression**: supported options: 4bit,  8bit for 4-bit or 8-bit block-wise quantization, or by default None for no compression
+* **compression**: supported options: 4bit, 8bit for 4-bit or 8-bit block-wise quantization, or by default None for no compression
 * **profiling_mode**: supported options: True to output time consumptions or by default False
 * **layer_shards_saving_path**: optionally another path to save the splitted model
 * **hf_token**: huggingface token can be provided here if downloading gated models like: *meta-llama/Llama-2-7b-hf*
-* **prefetching**: prefetching to overlap the model loading and compute. By default turned on. For now only AirLLMLlama2 supports this.
+* **prefetching**: prefetching to overlap the model loading and compute. By default, turned on. For now, only AirLLMLlama2 supports this.
 * **delete_original**: if you don't have too much disk space, you can set delete_original to true to delete the original downloaded hugging face model, only keep the transformed one to save half of the disk space. 
 
 ## MacOS
@@ -183,7 +183,7 @@ Just install airllm and run the code the same as on linux. See more in [Quick St
 * you probabaly need to install python native see more [here](https://stackoverflow.com/a/65432861/21230266)
 * only [Apple silicon](https://support.apple.com/en-us/HT211814) is supported
 
-Example [python notebook](https://github.com/lyogavin/Anima/blob/main/air_llm/examples/run_on_macos.ipynb)
+Example [python notebook] (https://github.com/lyogavin/Anima/blob/main/air_llm/examples/run_on_macos.ipynb)
 
 
 ## Example Python Notebook
@@ -395,7 +395,7 @@ BibTex entry:
 
 ## Contribution 
 
-Welcome contribution, ideas and discussions!
+Welcomed contributions, ideas and discussions!
 
 If you find it useful, please ⭐ or buy me a coffee! 🙏
 
