@@ -63,10 +63,6 @@ First, install the airllm pip package.
 pip install airllm
 ```
 
-```bash
-pip install -i https://pypi.org/simple/ airllm
-```
-
 ### 2. Inference
 
 Then, initialize AirLLMLlama2, pass in the huggingface repo ID of the model being used, or the local path, and inference can be performed similar to a regular transformer model.
