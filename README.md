@@ -8,7 +8,7 @@
 
 **AirLLM** optimizes inference memory usage, allowing 70B large language models to run inference on a single 4GB GPU card. No quantization, distillation, pruning or other model compression techniques that would result in degraded model performance are needed.
 
-<a href="https://github.com/lyogavin/Anima/stargazers">![GitHub Repo stars](https://img.shields.io/github/stars/lyogavin/Anima?style=social)</a>
+<a href="https://github.com/lyogavin/airllm/stargazers">![GitHub Repo stars](https://img.shields.io/github/stars/lyogavin/airllm?style=social)</a>
 [![Downloads](https://static.pepy.tech/personalized-badge/airllm?period=total&units=international_system&left_color=grey&right_color=blue&left_text=downloads)](https://pepy.tech/project/airllm)
 
 [![Code License](https://img.shields.io/badge/Code%20License-Apache_2.0-green.svg)](https://github.com/LianjiaTech/BELLE/blob/main/LICENSE)
@@ -111,7 +111,7 @@ Note: During inference, the original model will first be decomposed and saved la
 
 We just added model compression based on block-wise quantization-based model compression. Which can further **speed up the inference speed** for up to **3x** , with **almost ignorable accuracy loss!** (see more performance evaluation and why we use block-wise quantization in [this paper](https://arxiv.org/abs/2212.09720))
 
-![speed_improvement](https://github.com/lyogavin/Anima/blob/main/assets/airllm2_time_improvement.png?v=2&raw=true)
+![speed_improvement](https://github.com/lyogavin/airllm/blob/main/assets/airllm2_time_improvement.png?v=2&raw=true)
 
 #### How to enable model compression speed up:
 
@@ -150,14 +150,14 @@ Just install airllm and run the code the same as on linux. See more in [Quick St
 * you probabaly need to install python native see more [here](https://stackoverflow.com/a/65432861/21230266)
 * only [Apple silicon](https://support.apple.com/en-us/HT211814) is supported
 
-Example [python notebook] (https://github.com/lyogavin/Anima/blob/main/air_llm/examples/run_on_macos.ipynb)
+Example [python notebook] (https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
 
 
 ## Example Python Notebook
 
 Example colabs here:
 
-<a target="_blank" href="https://colab.research.google.com/github/lyogavin/Anima/blob/main/air_llm/examples/run_all_types_of_models.ipynb">
+<a target="_blank" href="https://colab.research.google.com/github/lyogavin/airllm/blob/main/air_llm/examples/run_all_types_of_models.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
@@ -305,7 +305,7 @@ BibTex entry:
 @software{airllm2023,
   author = {Gavin Li},
   title = {AirLLM: scaling large language models on low-end commodity computers},
-  url = {https://github.com/lyogavin/Anima/tree/main/air_llm},
+  url = {https://github.com/lyogavin/airllm/},
   version = {0.0},
   year = {2023},
 }
