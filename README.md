@@ -24,6 +24,8 @@
 
 ## Updates
 
+[2024/07/30] Support Llama3.1 405B ([example notebook](https://colab.research.google.com/github/lyogavin/airllm/blob/main/air_llm/examples/run_llama3.1_405B.ipynb)). Support 4bit quantization.
+
 [2024/04/20] AirLLM supports Llama3 natively already. Run Llama3 70B on 4GB single GPU.
 
 [2023/12/25] v2.8.2: Support MacOS running 70B large language models.
