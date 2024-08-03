@@ -298,7 +298,7 @@ class AirLLMBaseModel(GenerationMixin):
         layers = []
         for param_name, param in state_dict.items():
             if self.hf_quantizer is None:
-                layers.append(layer_name)
+                layers.append(param_name)
             else:
                 if '.weight' in param_name:
                     layer_name = param_name[:param_name.index(".weight") + len(".weight")]
