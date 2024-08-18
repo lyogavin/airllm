@@ -266,36 +266,51 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     for layer in tqdm(layers):
 
         # Optionnally load next shard
-        shards = [int(v.split('-')[1]) for k, v in index.items() if k.startswith(layer)]
-        if max(shards) > shard:
-            # optinoally delete original file
-            if delete_original and shard != 0:
+        # checking whether after spliting from '-', if second element exists. otherwise it throws errors for single 'model.safetensor' files
+        shards = [int(v.split('-')[1]) for k, v in index.items() if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
+        if len(shards) > 0:
+            if max(shards) > shard:
+                # optinoally delete original file
+                if delete_original and shard != 0:
+                    if not safetensors_format:
+                        to_delete = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
+                    else:
+                        to_delete = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
+
+                    print(f"deleting original file: {to_delete}")
+                    remove_real_and_linked_file(to_delete)
+                shard += 1
+                print(f'Loading shard {shard}/{n_shards}')
+
                 if not safetensors_format:
-                    to_delete = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
+                    to_load = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
                 else:
-                    to_delete = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
+                    to_load = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
 
-                print(f"deleting original file: {to_delete}")
-                remove_real_and_linked_file(to_delete)
-            shard += 1
-            print(f'Loading shard {shard}/{n_shards}')
+                # check if to_load exist, if not downloaad it...
+                if not os.path.exists(to_load):
+                    assert repo_id is not None
+                    huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
+                                                    token=hf_token)
 
-            if not safetensors_format:
-                to_load = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
-            else:
-                to_load = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
+                if not safetensors_format:
+                    state_dict.update(torch.load(to_load, map_location='cpu'))
+                else:
+                    state_dict.update(load_file(to_load, device='cpu'))
 
+        else:
+            shards = [v for k, v in index.items() if k.startswith(layer)]
+            modelfile = shards[0]
+            to_load = checkpoint_path / modelfile
             # check if to_load exist, if not downloaad it...
             if not os.path.exists(to_load):
                 assert repo_id is not None
                 huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
-                                                  token=hf_token)
-
+                                                token=hf_token)
             if not safetensors_format:
                 state_dict.update(torch.load(to_load, map_location='cpu'))
             else:
                 state_dict.update(load_file(to_load, device='cpu'))
-
 
         # Get layer state dict
         layer_state_dict = dict([(k, v) for k, v in state_dict.items() if k.startswith(layer)])

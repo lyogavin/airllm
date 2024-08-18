@@ -1,6 +1,15 @@
 import setuptools
+from setuptools.command.install import install
+import subprocess
 
-with open("README.md", "r") as fh:
+# upgrade transformers to latest version to avoid "`rope_scaling` must be a dictionary with two fields" error
+class PostInstallCommand(install):
+    def run(self):
+        install.run(self)
+        subprocess.check_call(["pip", "install", "--upgrade", "transformers"])
+
+# Windows uses a different default encoding (use a consistent encoding)
+with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setuptools.setup(
@@ -24,6 +33,9 @@ setuptools.setup(
         'scipy',
         #'bitsandbytes' set it to optional to support fallback when not installable
     ],
+    cmdclass={
+        'install': PostInstallCommand,
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

@@ -153,7 +153,8 @@ class AirLLMBaseModel(GenerationMixin):
             self.prefetching = False
             print(f"not support prefetching for compression for now. loading with no prepetching mode.")
 
-        if prefetching:
+        # this operation should run only if gpu is available
+        if prefetching and device.startswith("cuda"):
             self.stream = torch.cuda.Stream()
         else:
             self.stream = None
@@ -285,8 +286,12 @@ class AirLLMBaseModel(GenerationMixin):
         # pin memory:
         if self.prefetching:
             t = time.time()
-            for k in state_dict.keys():
-                state_dict[k].pin_memory()
+            if torch.cuda.is_available():  # Check if CUDA is available
+                for k in state_dict.keys():
+                    state_dict[k].pin_memory()
+            else:
+                # For CPU, no action is needed, but you could optionally add a log or message
+                print("Prefetching is enabled, but no pin_memory operation is needed for CPU.")
 
             elapsed_time = time.time() - t
             if self.profiling_mode:
