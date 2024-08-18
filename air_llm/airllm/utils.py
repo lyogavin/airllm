@@ -247,10 +247,8 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         else:
             print(f"some layer splits found, some are not, re-save all layers in case there's some corruptions.")
 
-
     if not delete_original:
         check_space(checkpoint_path, layer_shards_saving_path, compression, splitted_model_dir_name=splitted_model_dir_name)
-
 
 
     shard = 0
@@ -258,10 +256,11 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     state_dict = {}
 
 
-
     if not os.path.exists(saving_path):
         #os.makedirs(saving_path)
         saving_path.mkdir(parents=True, exist_ok=True)
+
+    single_modelfile = None
 
     for layer in tqdm(layers):
 
@@ -300,8 +299,8 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
         else:
             shards = [v for k, v in index.items() if k.startswith(layer)]
-            modelfile = shards[0]
-            to_load = checkpoint_path / modelfile
+            single_modelfile = shards[0]
+            to_load = checkpoint_path / single_modelfile
             # check if to_load exist, if not downloaad it...
             if not os.path.exists(to_load):
                 assert repo_id is not None
@@ -317,13 +316,11 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
         layer_state_dict = compress_layer_state_dict(layer_state_dict, compression)
 
-
         # Save layer state dict as using safetensors
 
         marker_exists = ModelPersister.get_model_persister().model_persist_exist(layer, saving_path)
         if not marker_exists:
             ModelPersister.get_model_persister().persist_model(layer_state_dict, layer, saving_path)
-
 
         # Free memory
         for k in layer_state_dict.keys():
@@ -331,6 +328,13 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                 del state_dict[k]
         del layer_state_dict
         clean_memory()
+
+    # deleting single modelfile if only a single modelfile was existing in hf repo 
+    # and deletion of single modelfile should happen in the end if delete_original=True
+    if delete_original and single_modelfile != None:
+        to_delete = checkpoint_path / single_modelfile
+        print(f"deleting original file: {to_delete}")
+        remove_real_and_linked_file(to_delete)
 
     return str(saving_path)
 
