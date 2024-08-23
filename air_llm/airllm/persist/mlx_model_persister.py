@@ -93,7 +93,7 @@ class MlxModelPersister(ModelPersister):
             to_load_path = Path(path) / (layer_name + ".mlx.npz")
             #available = psutil.virtual_memory().available / 1024 / 1024
             #print(f"start loading: {to_load_path}, before loading: {available:.02f}")
-            layer_state_dict = mx.load(to_load_path)
+            layer_state_dict = mx.load(str(to_load_path))
             #available = psutil.virtual_memory().available / 1024 / 1024
             #print(f"loaded {layer_name}, available mem: {available:.02f}")
 
