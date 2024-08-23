@@ -14,7 +14,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setuptools.setup(
     name="airllm",
-    version="2.10.1",
+    version="2.10.2",
     author="Gavin Li",
     author_email="gavinli@animaai.cloud",
     description="AirLLM allows single 4GB GPU card to run 70B large language models without quantization, distillation or pruning. 8GB vmem to run 405B Llama3.1.",
