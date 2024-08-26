@@ -10,7 +10,7 @@ class PostInstallCommand(install):
         try:
             subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "transformers"])
         except subprocess.CalledProcessError:
-            print("警告：無法升級 transformers 套件。請手動升級。")
+            print("Warning: Unable to upgrade transformers package. Please upgrade manually.")
 
 # Windows uses a different default encoding (use a consistent encoding)
 with open("README.md", "r", encoding="utf-8") as fh:
