@@ -1,3 +1,4 @@
+import sys
 import setuptools
 from setuptools.command.install import install
 import subprocess
@@ -6,7 +7,10 @@ import subprocess
 class PostInstallCommand(install):
     def run(self):
         install.run(self)
-        subprocess.check_call(["pip", "install", "--upgrade", "transformers"])
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "transformers"])
+        except subprocess.CalledProcessError:
+            print("Warning: Unable to upgrade transformers package. Please upgrade manually.")
 
 # Windows uses a different default encoding (use a consistent encoding)
 with open("README.md", "r", encoding="utf-8") as fh:
