@@ -24,6 +24,8 @@
 
 
 ## Updates
+[2024/08/20] v2.11.0: Support Qwen2.5
+
 [2024/08/18] v2.10.1 Support CPU inference. Support non sharded models. Thanks @NavodPeiris for the great work! 
 
 [2024/07/30] Support Llama3.1 **405B** ([example notebook](https://colab.research.google.com/github/lyogavin/airllm/blob/main/air_llm/examples/run_llama3.1_405B.ipynb)). Support **8bit/4bit quantization**.
