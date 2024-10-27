@@ -46,7 +46,7 @@
 
 [2023/12/01] airllm 2.0. Support compressions: **3x run time speed up!**
 
-[2023/11/20] airllm Initial verion!
+[2023/11/20] airllm Initial version!
 
 ## Star History
 
