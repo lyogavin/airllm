@@ -82,7 +82,6 @@ class AirLLMBaseModel(GenerationMixin):
             huggingface api token could be provided, by default None
         """
 
-
         self.profiling_mode = profiling_mode
         self.profiler = LayeredProfiler()
 
@@ -126,7 +125,6 @@ class AirLLMBaseModel(GenerationMixin):
         #print(f"using generation_config: {self.generation_config}")
 
         self.tokenizer = self.get_tokenizer(hf_token=hf_token)
-
 
         self.init_model()
 
@@ -325,7 +323,7 @@ class AirLLMBaseModel(GenerationMixin):
     # make GenerationMixin happy
     def can_generate(self):
         return True
-
+    """
     def prepare_inputs_for_generation(
             self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
     ):
@@ -364,7 +362,7 @@ class AirLLMBaseModel(GenerationMixin):
             }
         )
         return model_inputs
-
+    """
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
@@ -411,6 +409,8 @@ class AirLLMBaseModel(GenerationMixin):
             # we don't support kv cache for new version yet
             use_cache = False
 
+        old_position_ids = position_ids
+
         if self.profiling_mode:
             self.profiler.clear_profiling_time()
 
@@ -449,7 +449,7 @@ class AirLLMBaseModel(GenerationMixin):
 
             for i, (layer_name, layer) in tqdm(enumerate(zip(self.layer_names, self.layers)),
                                                desc=f'running layers({self.running_device})',
-                                               total=len(self.layers)):
+                                               total=len(self.layers), position=0, leave=True):
 
                 if self.prefetching:
                     if self.profiling_mode:
@@ -495,8 +495,14 @@ class AirLLMBaseModel(GenerationMixin):
                         elapsed_time = time.time() - t
                         self.profiler.add_profiling_time('create_layer_from_safe_tensor', elapsed_time)
 
+                #Calculate embeddings 
+                if self.layer_names_dict['embed'] == layer_name and i==0:
+                    #print("Calculating embeddings, ", layer)
+                    inputs_embeds = layer(input_ids)
+                    #print("inputs_embeds shape: ", inputs_embeds.shape)
+                    position_embeddings = self.model.model.rotary_emb(inputs_embeds, old_position_ids)
+            
                 # Run layer
-
                 for j, seq in enumerate(batch):
 
                     if layer_name == self.layer_names_dict['embed']:
@@ -525,6 +531,7 @@ class AirLLMBaseModel(GenerationMixin):
                             past_key_value_args = self.get_past_key_value_args(k_cache, v_cache)
 
                             kwargs = {'use_cache':True,
+                                      'position_embeddings': position_embeddings,
                                       }
 
                             pos_embed_args = self.get_pos_emb_args(len_p, len_s)
@@ -550,23 +557,25 @@ class AirLLMBaseModel(GenerationMixin):
                             len_seq = self.get_sequence_len(seq)
 
 
-
                             pos_embed_args = self.get_pos_emb_args(0, len_seq)
                             attention_mask_args = self.get_attention_mask_args(attention_mask, 0, len_seq)
                             position_ids_args = self.get_position_ids_args(position_ids, 0, len_seq)
-
-
-
 
                             if not use_cache:
 
                                 kwargs = {'use_cache': False,
                                           'attention_mask': attention_mask[:, :, -len_seq:, -len_seq:],
+                                          'position_embeddings': position_embeddings,
                                           }
+                                """                             
+                                print("position_embeddings[0].shape ", position_embeddings[0].shape)
+                                print("position_embeddings[1].shape", position_embeddings[1].shape)
+                                print("input id shape: ", input_ids.shape)
+                                print("correct shape : ", self.model.model.rotary_emb(input_ids, position_ids)[0].shape)
+                                print("sequence shape: ", seq.shape) 
+                                """
                                 kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
-
-
-                                new_seq = layer(seq, **kwargs)[0]
+                                new_seq = layer(seq, **kwargs)[0] #TODO fix error with position embeddings
                             else:
 
                                 kwargs = {'use_cache': True,
