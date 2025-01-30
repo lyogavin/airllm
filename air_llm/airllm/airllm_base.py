@@ -265,6 +265,7 @@ class AirLLMBaseModel(GenerationMixin):
         self.move_layer_to_device(state_dict)
 
     def load_layer_to_cpu(self, layer_name):
+        #print("Loading layer: ", layer_name, " to CPU")
 
         t = time.time()
 
@@ -275,9 +276,9 @@ class AirLLMBaseModel(GenerationMixin):
             state_dict, compression_time = load_layer_output
             disk_loading_time = elapsed_time - compression_time
 
-            self.profiler.add_profiling_time('load_safe_tensor', disk_loading_time)
+            self.profiler.add_profiling_time('load_safe_tensor_one_layer', disk_loading_time)
 
-            self.profiler.add_profiling_time('compression_time', compression_time)
+            self.profiler.add_profiling_time('compression_time_one_layer', compression_time)
         else:
             state_dict = load_layer_output
 
@@ -293,11 +294,12 @@ class AirLLMBaseModel(GenerationMixin):
 
             elapsed_time = time.time() - t
             if self.profiling_mode:
-                self.profiler.add_profiling_time('pin_memory_to_trigger_load', elapsed_time)
+                self.profiler.add_profiling_time('pin_memory_to_trigger_load_one_layer', elapsed_time)
 
         return state_dict
 
     def move_layer_to_device(self, state_dict):
+        #print(f"Moving layer {list(state_dict.keys())[0]} to device: ", self.running_device)
         layers = []
         for param_name, param in state_dict.items():
             if self.hf_quantizer is None:
@@ -444,44 +446,39 @@ class AirLLMBaseModel(GenerationMixin):
             (self.layer_names[i:i + self.batch_size_layer], self.layers[i:i + self.batch_size_layer])
         for i in range(0, len(self.layers), self.batch_size_layer)
         ]
-        
+               
         with torch.inference_mode(), ThreadPoolExecutor() as executor:
             futures = []
             
             if self.prefetching:
                 # Load first batch
-                for layer_name, layer in batches_layers[0]:
+                for (layer_name, layer) in zip(*batches_layers[0]):
                     future = executor.submit(self.load_layer_to_cpu, layer_name)
+                    #print(f"Appending {layer_name} to futures ")
                     futures.append(future)
                     
             if self.profiling_mode:
-                        t = time.time()
+                t = time.time()
                             
             for batch_index, (batch_layer_names, batch_layers) in tqdm(enumerate(batches_layers),
                                                                        desc = f'Running layer batch ({self.running_device})',
                                                                        total = len(batches_layers)):
-
                 all_moved_layers = []   
                 # Load batch of layers on gpu
                 if self.prefetching:
-                    for i, layer_name, layer in enumerate(zip(batch_layer_names, batch_layers)):
+                    for i, (layer_name, layer) in enumerate(zip(batch_layer_names, batch_layers)):
                         state_dict = futures[i].result()
-                        if self.profiling_mode:
-                            elapsed_time = time.time() - t
-                            self.profiler.add_profiling_time('load_safe_tensor_cpu_wait', elapsed_time)
-                        if self.profiling_mode:
-                            t = time.time()
-                        all_moved_layers.append(move_layer_to_device(state_dict))
+                        all_moved_layers.append(self.move_layer_to_device(state_dict))
                     if self.profiling_mode:
                         elapsed_time = time.time() - t
                         self.profiler.add_profiling_time('create_layer_from_state_dict', elapsed_time)
                     
                     # Load next batch on cpu    
-                    if (batch_index + 1) < len(batch_layer_names):
+                    if (batch_index + 1) < len(batches_layers):
                         if self.profiling_mode:
                             t = time.time()
                         futures=[]
-                        for layer_name, layer in batches_layers[batch_index+1]:
+                        for (layer_name, layer) in zip(*batches_layers[batch_index+1]):
                             future = executor.submit(self.load_layer_to_cpu, layer_name)
                             futures.append(future)
 
