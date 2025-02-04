@@ -263,8 +263,13 @@ class AirLLMBaseModel(GenerationMixin):
 
         if quantization_config is not None:
             self.hf_quantizer = AutoHfQuantizer.from_config(
-                quantization_config, pre_quantized=True
+                quantization_config,
+                pre_quantized=True,
+                torch_dtype=self.running_dtype,
             )
+            if isinstance(self.hf_quantizer, HqqHfQuantizer):
+                # Ensure compute_dtype (i.e. torch_dtype) is set to the same as running_dtype
+                self.hf_quantizer.torch_dtype = self.running_dtype
             device_map = self.hf_quantizer.update_device_map(None)
             self.hf_quantizer.preprocess_model(model=self.model, device_map=device_map)
         self.model.eval()
