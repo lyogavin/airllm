@@ -1,6 +1,6 @@
 # Anima
 
-![Anima Logo](https://github.com/lyogavin/Anima/blob/main/anima_logo.png?raw=true)
+![airllm_logo](https://github.com/lyogavin/airllm/blob/main/assets/airllm_logo_sm.png?v=3&raw=true)
 
 第一个开源的基于QLoRA的33B中文大语言模型 the First QLoRA based 33B fully open-source Chinese LLM
 
