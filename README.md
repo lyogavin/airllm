@@ -24,8 +24,9 @@
 
 ## AI Agents Recommendation:
 
-[Best AI Game Sprite Generator](https://godmodeai.co)
-[Best AI Facial Expression Editor](https://crazyfaceai.com)
+* [Best AI Game Sprite Generator](https://godmodeai.co)
+
+* [Best AI Facial Expression Editor](https://crazyfaceai.com)
 
 ## Updates
 [2024/08/20] v2.11.0: Support Qwen2.5
