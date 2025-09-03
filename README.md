@@ -22,6 +22,10 @@
 [![Support me on Patreon](https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fshieldsio-patreon.vercel.app%2Fapi%3Fusername%3Dgavinli%26type%3Dpatrons&style=flat)](https://patreon.com/gavinli)
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/lyogavin?logo=GitHub&color=lightgray)](https://github.com/sponsors/lyogavin)
 
+## AI Agents Recommendation:
+
+[Best AI Game Sprite Generator](https://godmodeai.co)
+[Best AI Facial Expression Editor](https://crazyfaceai.com)
 
 ## Updates
 [2024/08/20] v2.11.0: Support Qwen2.5
