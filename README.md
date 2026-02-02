@@ -131,7 +131,7 @@ We just added model compression based on block-wise quantization-based model com
 #### How to enable model compression speed up:
 
 * Step 1. make sure you have [bitsandbytes](https://github.com/TimDettmers/bitsandbytes) installed by `pip install -U bitsandbytes `
-* Step 2. make sure airllm verion later than 2.0.0: `pip install -U airllm` 
+* Step 2. make sure airllm version later than 2.0.0: `pip install -U airllm` 
 * Step 3. when initialize the model, passing the argument compression ('4bit' or '8bit'):
 
 ```python
