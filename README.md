@@ -29,6 +29,8 @@
 * [Best AI Facial Expression Editor](https://crazyfaceai.com)
 
 ## Updates
+[2025/02/18] v2.12.0: Support Qwen3.5 MoE (e.g. Qwen3.5-397B-A17B). Fixed shard filename detection, cross-volume space check, and layer naming for multimodal MoE architectures.
+
 [2024/08/20] v2.11.0: Support Qwen2.5
 
 [2024/08/18] v2.10.1 Support CPU inference. Support non sharded models. Thanks @NavodPeiris for the great work! 
@@ -217,6 +219,29 @@ input_tokens = model.tokenizer(input_text,
 generation_output = model.generate(
     input_tokens['input_ids'].cuda(), 
     max_new_tokens=5,
+    use_cache=True,
+    return_dict_in_generate=True)
+model.tokenizer.decode(generation_output.sequences[0])
+```
+
+* Qwen3.5 MoE (e.g. Qwen3.5-397B-A17B):
+
+```python
+from airllm import AutoModel
+MAX_LENGTH = 128
+# AutoModel automatically detects Qwen3.5 MoE architecture
+model = AutoModel.from_pretrained("Qwen/Qwen3.5-397B-A17B",
+    layer_shards_saving_path="/path/to/cache/layer_shards"  # recommended for large models
+)
+input_text = ['What is the capital of China?',]
+input_tokens = model.tokenizer(input_text,
+    return_tensors="pt",
+    return_attention_mask=False,
+    truncation=True,
+    max_length=MAX_LENGTH)
+generation_output = model.generate(
+    input_tokens['input_ids'].cuda(),
+    max_new_tokens=20,
     use_cache=True,
     return_dict_in_generate=True)
 model.tokenizer.decode(generation_output.sequences[0])

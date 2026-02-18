@@ -132,26 +132,32 @@ def load_layer(local_path, layer_name, profiling=False):
 
 
 def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None, splitted_model_dir_name='splitted_model'):
+    # When a separate saving path is provided the split layers are a reorganization of the
+    # source data (same total bytes, not additive), so a cross-path size check is meaningless.
+    # Only check space when splitting in-place (no separate saving path).
+    if layer_shards_saving_path is not None:
+        print(f"Separate layer_shards_saving_path provided, skipping space check.")
+        return
+
     total_shard_files_size_bytes = 0
     for model_shard_file in glob(str(checkpoint_path / '*')):
         total_shard_files_size_bytes += os.path.getsize(model_shard_file)
 
     total_saved_split_files_size_bytes = 0
-    if layer_shards_saving_path is not None:
-        for saved_split_file in glob(str(Path(layer_shards_saving_path) / splitted_model_dir_name / '*')):
-            total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
+    for saved_split_file in glob(str(checkpoint_path / splitted_model_dir_name / '*')):
+        total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
 
     if compression == '4bit':
         total_shard_files_size_bytes = int(total_shard_files_size_bytes / 0.2813)
     elif compression == '8bit':
         total_shard_files_size_bytes = total_shard_files_size_bytes // 2
 
-    total, used, free = shutil.disk_usage(checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path)
+    total, used, free = shutil.disk_usage(checkpoint_path)
 
     if free + total_saved_split_files_size_bytes < total_shard_files_size_bytes:
-        raise NotEnoughSpaceException(f"Not enough space. Free space under {checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path}:"  \
+        raise NotEnoughSpaceException(f"Not enough space. Free space under {checkpoint_path}:"  \
                                       f" {free / 1024 / 1024 / 1024:.02f}GB. Model total size: {total_shard_files_size_bytes / 1024 / 1024 / 1024:.02f}GB. " \
-                                      f"existing space under {checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path} assuming can reuse: {total_saved_split_files_size_bytes/ 1024 / 1024 / 1024:.02f}GB. "
+                                      f"existing space under {checkpoint_path} assuming can reuse: {total_saved_split_files_size_bytes/ 1024 / 1024 / 1024:.02f}GB. "
                                       )
 
 def compress_layer_state_dict(layer_state_dict, compression=None):
@@ -217,7 +223,8 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     if layer_names is None:
         n_layers = len(set([int(k.split('.')[2]) for k in index.keys() if 'model.layers' in k]))
     else:
-        n_layers = len(set([int(k[len(layer_names['layer_prefix']):].split('.')[1]) for k in index.keys() if layer_names['layer_prefix'] in k]))
+        prefix_dot = layer_names['layer_prefix'] + '.'
+        n_layers = len(set([int(k[len(prefix_dot):].split('.')[0]) for k in index.keys() if k.startswith(prefix_dot)]))
 
     if layer_names is None:
         layers = ['model.embed_tokens.'] + [f'model.layers.{i}.' for i in range(n_layers)] + ['model.norm.', 'lm_head.']
@@ -251,8 +258,12 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         check_space(checkpoint_path, layer_shards_saving_path, compression, splitted_model_dir_name=splitted_model_dir_name)
 
 
+    # Build a sorted list of unique shard filenames from the index, preserving order
+    all_shard_files = sorted(set(index.values()))
+    n_shards = len(all_shard_files)
+    # Map shard index (1-based) to actual filename
+    shard_index_to_file = {i + 1: f for i, f in enumerate(all_shard_files)}
     shard = 0
-    n_shards = len(set(index.values()))
     state_dict = {}
 
 
@@ -264,31 +275,26 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
     for layer in tqdm(layers):
 
-        # Optionnally load next shard
-        # checking whether after spliting from '-', if second element exists. otherwise it throws errors for single 'model.safetensor' files
-        shards = [int(v.split('-')[1]) for k, v in index.items() if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
-        if len(shards) > 0:
-            if max(shards) > shard:
-                # optinoally delete original file
-                if delete_original and shard != 0:
-                    if not safetensors_format:
-                        to_delete = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
-                    else:
-                        to_delete = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
+        # Get shard numbers for this layer's keys, using the sorted shard list position
+        shard_files_for_layer = set(v for k, v in index.items() if k.startswith(layer))
+        shard_nums = sorted(set(all_shard_files.index(f) + 1 for f in shard_files_for_layer if f in all_shard_files))
 
+        if len(shard_nums) > 0 and n_shards > 1:
+            if max(shard_nums) > shard:
+                # optionally delete original file
+                if delete_original and shard != 0:
+                    to_delete = checkpoint_path / shard_index_to_file[shard]
                     print(f"deleting original file: {to_delete}")
                     remove_real_and_linked_file(to_delete)
                 shard += 1
                 print(f'Loading shard {shard}/{n_shards}')
 
-                if not safetensors_format:
-                    to_load = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
-                else:
-                    to_load = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
+                # Use actual filename from index instead of constructing it
+                to_load = checkpoint_path / shard_index_to_file[shard]
 
-                # check if to_load exist, if not downloaad it...
+                # check if to_load exist, if not download it...
                 if not os.path.exists(to_load):
-                    assert repo_id is not None
+                    assert repo_id is not None, f"Shard file {to_load} not found locally and no repo_id provided for download."
                     huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
                                                     token=hf_token)
 
@@ -298,12 +304,14 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                     state_dict.update(load_file(to_load, device='cpu'))
 
         else:
-            shards = [v for k, v in index.items() if k.startswith(layer)]
-            single_modelfile = shards[0]
+            shard_files = list(shard_files_for_layer)
+            if not shard_files:
+                continue
+            single_modelfile = shard_files[0]
             to_load = checkpoint_path / single_modelfile
-            # check if to_load exist, if not downloaad it...
+            # check if to_load exist, if not download it...
             if not os.path.exists(to_load):
-                assert repo_id is not None
+                assert repo_id is not None, f"Shard file {to_load} not found locally and no repo_id provided for download."
                 huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
                                                 token=hf_token)
             if not safetensors_format:
