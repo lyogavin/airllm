@@ -82,6 +82,61 @@ def clean_memory():
     torch.cuda.empty_cache()
 
 
+def calculate_n_layers_in_gpu(checkpoint_path, layer_names, device="cuda:0", vram_safety_margin=0.8):
+    """
+    Auto-detect how many layers can fit in currently available VRAM.
+
+    Parameters
+    ----------
+    checkpoint_path : Path
+        Path to the splitted model directory containing per-layer .safetensors files.
+    layer_names : list of str
+        Ordered list of layer names (embed, layers.0..N, norm, lm_head).
+    device : str
+        CUDA device string, e.g. "cuda:0".
+    vram_safety_margin : float
+        Fraction of free VRAM to use (default 0.8 = 80%, leaving 20% for activations).
+
+    Returns
+    -------
+    int
+        Number of layers to load into GPU simultaneously (at least 1).
+    """
+    if not torch.cuda.is_available() or not device.startswith("cuda"):
+        return 1
+
+    try:
+        device_idx = int(device.split(":")[-1]) if ":" in device else 0
+        free_bytes, _ = torch.cuda.mem_get_info(device_idx)
+        usable_bytes = int(free_bytes * vram_safety_margin)
+
+        # Estimate average layer size from the transformer layers (skip embed/norm/lm_head)
+        transformer_layer_names = [n for n in layer_names if n not in (layer_names[0], layer_names[-1], layer_names[-2])]
+        sample_layers = transformer_layer_names[:min(3, len(transformer_layer_names))]
+
+        layer_sizes = []
+        for layer_name in sample_layers:
+            layer_file = Path(checkpoint_path) / (layer_name + ".safetensors")
+            if layer_file.exists():
+                layer_sizes.append(os.path.getsize(layer_file))
+
+        if not layer_sizes:
+            return 1
+
+        avg_layer_bytes = sum(layer_sizes) / len(layer_sizes)
+        n_layers = max(1, int(usable_bytes / avg_layer_bytes))
+        n_layers = min(n_layers, len(layer_names))
+
+        print(f"Auto VRAM detection: {free_bytes / 1024**3:.1f}GB free, "
+              f"avg layer size {avg_layer_bytes / 1024**3:.2f}GB → loading {n_layers} layer(s) per pass")
+
+        return n_layers
+
+    except Exception as e:
+        print(f"VRAM auto-detection failed ({e}), defaulting to 1 layer per pass.")
+        return 1
+
+
 def uncompress_layer_state_dict(layer_state_dict):
     uncompressed_layer_state_dict = None
     if any(['4bit' in k for k in layer_state_dict.keys()]):

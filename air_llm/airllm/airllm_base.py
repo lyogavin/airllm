@@ -23,7 +23,7 @@ except ImportError:
     BETTERTRANSFORMER_AVAILABLE = False
 
 from .utils import clean_memory, load_layer, \
-    find_or_create_local_splitted_path
+    find_or_create_local_splitted_path, calculate_n_layers_in_gpu
 
 try:
     import bitsandbytes as bnb
@@ -61,7 +61,7 @@ class AirLLMBaseModel(GenerationMixin):
 
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=torch.float16, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
-                 hf_token=None, prefetching=True, delete_original=False):
+                 hf_token=None, prefetching=True, delete_original=False, n_layers_in_gpu=None):
         """
         Sharded version of LlamaForCausalLM : the model is splitted into layer shards to reduce GPU memory usage.
         During the forward pass, the inputs are processed layer by layer, and the GPU memory is freed after each layer.
@@ -151,6 +151,15 @@ class AirLLMBaseModel(GenerationMixin):
 
         self.main_input_name = "input_ids"
 
+        # Auto-detect or use provided n_layers_in_gpu
+        if n_layers_in_gpu is not None:
+            self.n_layers_in_gpu = max(1, int(n_layers_in_gpu))
+            print(f"Using manually specified n_layers_in_gpu={self.n_layers_in_gpu}")
+        else:
+            self.n_layers_in_gpu = calculate_n_layers_in_gpu(
+                self.checkpoint_path, self.layer_names, device=device
+            )
+
         # model weights prefetch cuda stream
         self.prefetching = prefetching
 
@@ -158,8 +167,12 @@ class AirLLMBaseModel(GenerationMixin):
             self.prefetching = False
             print(f"not support prefetching for compression for now. loading with no prepetching mode.")
 
+        if self.n_layers_in_gpu > 1:
+            self.prefetching = False
+            print(f"Prefetching disabled: using multi-layer mode ({self.n_layers_in_gpu} layers per pass).")
+
         # this operation should run only if gpu is available
-        if prefetching and device.startswith("cuda"):
+        if self.prefetching and device.startswith("cuda"):
             self.stream = torch.cuda.Stream()
         else:
             self.stream = None
@@ -445,164 +458,135 @@ class AirLLMBaseModel(GenerationMixin):
 
         with torch.inference_mode(), ThreadPoolExecutor() as executor:
 
-            # Load first layer
+            # Build list of (index, layer_name, layer) chunks
+            layer_triples = list(zip(range(len(self.layer_names)), self.layer_names, self.layers))
+            chunks = [layer_triples[s:s + self.n_layers_in_gpu]
+                      for s in range(0, len(layer_triples), self.n_layers_in_gpu)]
+
+            # Prefetch first chunk (single-layer mode only)
             if self.prefetching:
-                #with torch.cuda.stream(self.stream):
-                #state_dict = self.load_layer_to_cpu(self.layer_names[0])
                 future = executor.submit(self.load_layer_to_cpu, self.layer_names[0])
 
+            for chunk in tqdm(chunks,
+                              desc=f'running layer chunks({self.running_device})',
+                              total=len(chunks)):
 
-            for i, (layer_name, layer) in tqdm(enumerate(zip(self.layer_names, self.layers)),
-                                               desc=f'running layers({self.running_device})',
-                                               total=len(self.layers)):
-
-                if self.prefetching:
-                    if self.profiling_mode:
-                        t = time.time()
-                    # Load current layer and prepare next layer
-                    state_dict = future.result()
-                    #torch.cuda.current_stream().wait_stream(self.stream)
-                    if self.profiling_mode:
-                        elapsed_time = time.time() - t
-                        self.profiler.add_profiling_time('load_safe_tensor_cpu_wait', elapsed_time)
-
-                    #for param_name, param in state_dict.items():
-                    #    state_dict[param_name] = param.to('cuda', non_blocking=True)
-
-                    if self.profiling_mode:
-                        t = time.time()
-                    moved_layers = self.move_layer_to_device(state_dict)
-                    if self.profiling_mode:
-                        elapsed_time = time.time() - t
-                        self.profiler.add_profiling_time('create_layer_from_state_dict', elapsed_time)
-
-                    # kick off next layer loading
-
-                    if (i + 1) < len(self.layer_names):
-                        #with torch.cuda.stream(self.stream):
-                        #state_dict = self.load_layer_to_cpu(self.layer_names[i + 1])
+                # --- Load all layers in this chunk into GPU ---
+                chunk_moved = []  # list of (layer, moved_layer_names)
+                for ci, (i, layer_name, layer) in enumerate(chunk):
+                    if self.prefetching:
                         if self.profiling_mode:
                             t = time.time()
-                        future = executor.submit(self.load_layer_to_cpu, self.layer_names[i+1])
-                        #for param_name, param in state_dict.items():
-                        #    state_dict[param_name] = param.to('cuda', non_blocking=True)
-
+                        state_dict = future.result()
                         if self.profiling_mode:
                             elapsed_time = time.time() - t
-                            self.profiler.add_profiling_time('kick_off_load_cpu', elapsed_time)
+                            self.profiler.add_profiling_time('load_safe_tensor_cpu_wait', elapsed_time)
 
-                else:
-                    state_dict = self.load_layer_to_cpu(layer_name)
-                    if self.profiling_mode:
-                        t = time.time()
-                    moved_layers = self.move_layer_to_device(state_dict)
-                    if self.profiling_mode:
-                        elapsed_time = time.time() - t
-                        self.profiler.add_profiling_time('create_layer_from_safe_tensor', elapsed_time)
+                        if self.profiling_mode:
+                            t = time.time()
+                        moved_layers = self.move_layer_to_device(state_dict)
+                        if self.profiling_mode:
+                            elapsed_time = time.time() - t
+                            self.profiler.add_profiling_time('create_layer_from_state_dict', elapsed_time)
 
-                # Run layer
-
-                for j, seq in enumerate(batch):
-
-                    if layer_name == self.layer_names_dict['embed']:
-                        batch[j] = layer(seq)
-                    elif layer_name == self.layer_names_dict['norm']:
-                        #batch[j] = layer(seq[torch.arange(n_seq), batch_eos[j]][:, None])
-                        batch[j] = self.run_norm(layer, seq)
-
-                        if output_attentions:
-                            all_hidden_states[i].append(batch[j])
-                    elif layer_name == self.layer_names_dict['lm_head']:
-                        batch[j] = self.run_lm_head(layer, seq)
+                        # Kick off next layer
+                        next_flat_idx = chunk[0][0] + ci + 1
+                        if next_flat_idx < len(self.layer_names):
+                            if self.profiling_mode:
+                                t = time.time()
+                            future = executor.submit(self.load_layer_to_cpu, self.layer_names[next_flat_idx])
+                            if self.profiling_mode:
+                                elapsed_time = time.time() - t
+                                self.profiler.add_profiling_time('kick_off_load_cpu', elapsed_time)
                     else:
+                        state_dict = self.load_layer_to_cpu(layer_name)
+                        if self.profiling_mode:
+                            t = time.time()
+                        moved_layers = self.move_layer_to_device(state_dict)
+                        if self.profiling_mode:
+                            elapsed_time = time.time() - t
+                            self.profiler.add_profiling_time('create_layer_from_safe_tensor', elapsed_time)
 
-                        if output_attentions:
-                            all_hidden_states[i].append(new_seq)
+                    chunk_moved.append((i, layer_name, layer, moved_layers))
 
-                        if past_key_values is not None:
-                            # join past kv
-                            k_cache, v_cache = past_key_values[i - 1]
-                            len_p = self.get_past_key_values_cache_seq_len(past_key_values)
-                            len_s = self.get_sequence_len(seq)
+                # --- Run batch through all layers in this chunk ---
+                for (i, layer_name, layer, moved_layers) in chunk_moved:
+                    for j, seq in enumerate(batch):
 
-                            position_ids_args = self.get_position_ids_args(position_ids, len_p, len_s)
-                            attention_mask_args = self.get_attention_mask_args(attention_mask, len_p, len_s)
-                            past_key_value_args = self.get_past_key_value_args(k_cache, v_cache)
-
-                            kwargs = {'use_cache':True,
-                                      }
-
-                            pos_embed_args = self.get_pos_emb_args(len_p, len_s)
-                            kwargs = {**kwargs, **past_key_value_args, **pos_embed_args, **attention_mask_args,
-                                      **position_ids_args}
-
-
-                            layer_outputs = layer(seq,
-                                                  **kwargs
-                                                  )
-                            new_seq = layer_outputs[0]
+                        if layer_name == self.layer_names_dict['embed']:
+                            batch[j] = layer(seq)
+                        elif layer_name == self.layer_names_dict['norm']:
+                            batch[j] = self.run_norm(layer, seq)
 
                             if output_attentions:
-                                all_self_attns[i].append(layer_outputs[1])
-
-                            if use_cache:
-                                (k_cache, v_cache) = layer_outputs[2 if output_attentions else 1]
-                                kv_cache_list[i][0].append(k_cache)
-                                kv_cache_list[i][1].append(v_cache)
-
-
+                                all_hidden_states[i].append(batch[j])
+                        elif layer_name == self.layer_names_dict['lm_head']:
+                            batch[j] = self.run_lm_head(layer, seq)
                         else:
-                            len_seq = self.get_sequence_len(seq)
 
+                            if output_attentions:
+                                all_hidden_states[i].append(new_seq)
 
+                            if past_key_values is not None:
+                                k_cache, v_cache = past_key_values[i - 1]
+                                len_p = self.get_past_key_values_cache_seq_len(past_key_values)
+                                len_s = self.get_sequence_len(seq)
 
-                            pos_embed_args = self.get_pos_emb_args(0, len_seq)
-                            attention_mask_args = self.get_attention_mask_args(attention_mask, 0, len_seq)
-                            position_ids_args = self.get_position_ids_args(position_ids, 0, len_seq)
+                                position_ids_args = self.get_position_ids_args(position_ids, len_p, len_s)
+                                attention_mask_args = self.get_attention_mask_args(attention_mask, len_p, len_s)
+                                past_key_value_args = self.get_past_key_value_args(k_cache, v_cache)
 
+                                kwargs = {'use_cache': True}
+                                pos_embed_args = self.get_pos_emb_args(len_p, len_s)
+                                kwargs = {**kwargs, **past_key_value_args, **pos_embed_args,
+                                          **attention_mask_args, **position_ids_args}
 
+                                layer_outputs = layer(seq, **kwargs)
+                                new_seq = layer_outputs[0]
 
+                                if output_attentions:
+                                    all_self_attns[i].append(layer_outputs[1])
 
-                            if not use_cache:
+                                if use_cache:
+                                    (k_cache, v_cache) = layer_outputs[2 if output_attentions else 1]
+                                    kv_cache_list[i][0].append(k_cache)
+                                    kv_cache_list[i][1].append(v_cache)
 
-                                kwargs = {'use_cache': False,
-                                          'attention_mask': attention_mask[:, :, -len_seq:, -len_seq:],
-                                          }
-                                kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
-
-
-                                new_seq = layer(seq, **kwargs)[0]
                             else:
+                                len_seq = self.get_sequence_len(seq)
 
-                                kwargs = {'use_cache': True,
-                                          'attention_mask': attention_mask[:, :, -len_seq:, -len_seq:],
-                                          }
-                                kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
+                                pos_embed_args = self.get_pos_emb_args(0, len_seq)
+                                attention_mask_args = self.get_attention_mask_args(attention_mask, 0, len_seq)
+                                position_ids_args = self.get_position_ids_args(position_ids, 0, len_seq)
 
-                                layer_out = layer(seq, **kwargs)
+                                if not use_cache:
+                                    kwargs = {'use_cache': False,
+                                              'attention_mask': attention_mask[:, :, -len_seq:, -len_seq:]}
+                                    kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
+                                    new_seq = layer(seq, **kwargs)[0]
+                                else:
+                                    kwargs = {'use_cache': True,
+                                              'attention_mask': attention_mask[:, :, -len_seq:, -len_seq:]}
+                                    kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
+                                    layer_out = layer(seq, **kwargs)
+                                    new_seq, (k_cache, v_cache) = layer_out
+                                    kv_cache_list[i][0].append(k_cache)
+                                    kv_cache_list[i][1].append(v_cache)
 
-                                # TODO: adopt Cache mechanism in 4.36
-                                new_seq, (k_cache, v_cache) = layer_out
-                                kv_cache_list[i][0].append(k_cache)
-                                kv_cache_list[i][1].append(v_cache)
+                            batch[j] = new_seq
 
-                                # print(f"k_cache sizes: {[len(x[1]) for x in kv_cache_list]}")
+                    if output_hidden_states:
+                        all_hidden_states += (torch.cat(batch, 0),)
 
-                        batch[j] = new_seq
+                # --- Evict entire chunk from GPU ---
+                for (i, layer_name, layer, moved_layers) in chunk_moved:
+                    if self.hf_quantizer is not None:
+                        for param_name in moved_layers:
+                            set_module_tensor_to_device(self.model, param_name, 'meta')
+                    else:
+                        layer.to("meta")
 
-                if output_hidden_states:
-                    all_hidden_states += (torch.cat(batch, 0),)
-
-                # Remove previous layer from memory (including buffers)
-
-                if self.hf_quantizer is not None:
-                    for param_name in moved_layers:#param_name, param in state_dict.items():
-                        set_module_tensor_to_device(self.model, param_name,'meta')
-                else:
-                    layer.to("meta")
-
-                layer.to("meta")
-                clean_memory()  # proposed by CPMP
+                clean_memory()
 
         logits = torch.cat(batch, 0)
         if use_cache:
