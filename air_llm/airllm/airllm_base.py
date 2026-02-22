@@ -50,6 +50,8 @@ except ImportError:
 
 class AirLLMBaseModel(GenerationMixin):
 
+    _is_stateful = False  # required by transformers 5.x GenerationMixin
+
     # customize layer names here
     def set_layer_names_dict(self):
         self.layer_names_dict = {'embed': 'model.embed_tokens',
@@ -106,6 +108,7 @@ class AirLLMBaseModel(GenerationMixin):
         self.hf_token = hf_token
 
         # Save parameters
+        self.model_local_path_or_repo_id = model_local_path_or_repo_id
 
         self.set_layer_names_dict()
 
@@ -157,8 +160,13 @@ class AirLLMBaseModel(GenerationMixin):
             print(f"Using manually specified n_layers_in_gpu={self.n_layers_in_gpu}")
         else:
             self.n_layers_in_gpu = calculate_n_layers_in_gpu(
-                self.checkpoint_path, self.layer_names, device=device
+                self.checkpoint_path, self.layer_names, device=device,
+                layer_shards_saving_path=layer_shards_saving_path
             )
+
+        # Fraction of free VRAM to use when dynamically recalculating per forward pass.
+        # Can be overridden by callers (e.g. server.py) via model._vram_fraction = 0.75
+        self._vram_fraction = 0.75
 
         # model weights prefetch cuda stream
         self.prefetching = prefetching
@@ -185,6 +193,45 @@ class AirLLMBaseModel(GenerationMixin):
             return GenerationConfig.from_pretrained(self.model_local_path)
         except Exception as e:
             return GenerationConfig()
+
+    def _update_n_layers_in_gpu(self):
+        """Recalculate n_layers_in_gpu from current free VRAM before each forward
+        pass. Reflects GPU memory consumed by other processes at call time.
+        Uses self._vram_fraction (default 0.75) as a safety margin.
+        """
+        import glob
+        import os as _os
+
+        if not torch.cuda.is_available():
+            return
+
+        try:
+            free_bytes, _ = torch.cuda.mem_get_info(0)
+        except Exception:
+            return
+
+        # Find layer shard files in the checkpoint path
+        shard_pattern = _os.path.join(self.checkpoint_path, 'model.layers.*.safetensors')
+        shard_files = glob.glob(shard_pattern)
+        if not shard_files:
+            return
+
+        sizes = sorted(_os.path.getsize(f) for f in shard_files)
+        median_bytes = sizes[len(sizes) // 2]
+        if median_bytes == 0:
+            return
+
+        usable_bytes = int(free_bytes * self._vram_fraction)
+        n = max(1, int(usable_bytes // median_bytes))
+
+        if n != self.n_layers_in_gpu:
+            print(
+                f"[AirLLM] VRAM: {free_bytes/1e9:.1f}GB free "
+                f"({self._vram_fraction*100:.0f}% usable) "
+                f"→ n_layers_in_gpu {self.n_layers_in_gpu} → {n}",
+                flush=True
+            )
+            self.n_layers_in_gpu = n
 
     # a chance to customize tokenizer
     def get_tokenizer(self, hf_token=None):
@@ -237,9 +284,14 @@ class AirLLMBaseModel(GenerationMixin):
         quantization_config = getattr(self.config, "quantization_config", None)
 
         if quantization_config is not None:
-            self.hf_quantizer = AutoHfQuantizer.from_config(quantization_config, pre_quantized=True)
-            device_map = self.hf_quantizer.update_device_map(None)
-            self.hf_quantizer.preprocess_model(model = self.model, device_map = device_map)
+            try:
+                self.hf_quantizer = AutoHfQuantizer.from_config(quantization_config, pre_quantized=True)
+                device_map = self.hf_quantizer.update_device_map(None)
+                self.hf_quantizer.preprocess_model(model=self.model, device_map=device_map)
+            except Exception as e:
+                print(f"WARNING: quantizer setup failed ({e}), continuing without quantizer preprocessing. "
+                      "Weights will be loaded as-is from shards.")
+                self.hf_quantizer = None
 
         self.model.eval()
         self.model.tie_weights()
@@ -347,6 +399,13 @@ class AirLLMBaseModel(GenerationMixin):
     def prepare_inputs_for_generation(
             self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
     ):
+        # AirLLM does not support the DynamicCache / Cache API introduced in transformers 4.36+
+        # Treat any Cache object as None so we always run full forward passes
+        if cache_utils_installed and past_key_values is not None:
+            from transformers.cache_utils import Cache
+            if isinstance(past_key_values, Cache):
+                past_key_values = None
+
         if past_key_values is not None:
             past_length = self.get_past_key_values_cache_seq_len(past_key_values) #[0][0].shape[2]
 
@@ -405,6 +464,14 @@ class AirLLMBaseModel(GenerationMixin):
         return {'position_ids': full_position_ids[:, len_p:len_p + len_s]}
 
 
+    def run_layer(self, layer, seq, **kwargs):
+        """Run a transformer layer and return (hidden_states, layer_output_tuple).
+        Override in subclasses if the layer returns a plain tensor instead of a tuple."""
+        out = layer(seq, **kwargs)
+        if isinstance(out, torch.Tensor):
+            return out, (out,)
+        return out[0], out
+
     def run_lm_head(self, layer, seq):
         return layer(seq).float()
 
@@ -428,6 +495,7 @@ class AirLLMBaseModel(GenerationMixin):
         if cache_utils_installed:
             # we don't support kv cache for new version yet
             use_cache = False
+            past_key_values = None  # DynamicCache from transformers 5.x is not subscriptable
 
         if self.profiling_mode:
             self.profiler.clear_profiling_time()
@@ -435,10 +503,20 @@ class AirLLMBaseModel(GenerationMixin):
             forward_start = time.process_time()
             forward_start_wall = time.time()
 
+        # Recalculate n_layers_in_gpu from current free VRAM before each pass
+        self._update_n_layers_in_gpu()
+
         # Reboot the model to make sure buffers are loaded and memory is clean
-        del self.model
-        clean_memory()
-        self.init_model()
+        # Subclasses can set _skip_model_reinit=True to keep the skeleton alive
+        # between tokens (avoids rebuilding empty skeleton on every decode step).
+        if not getattr(self, '_skip_model_reinit', False):
+            del self.model
+            clean_memory()
+            self.init_model()
+        else:
+            clean_memory()
+
+        print(f"[AirLLM] forward() called — input shape: {input_ids.shape}, device: {input_ids.device}", flush=True)
 
         batch = [input_ids_unit.to(self.running_device).unsqueeze(0) for input_ids_unit in input_ids]
         n_seq = len(batch[0])
@@ -467,11 +545,16 @@ class AirLLMBaseModel(GenerationMixin):
             if self.prefetching:
                 future = executor.submit(self.load_layer_to_cpu, self.layer_names[0])
 
-            for chunk in tqdm(chunks,
+            n_chunks = len(chunks)
+            print(f"[AirLLM] Starting inference: {len(self.layer_names)} layers, {n_chunks} chunk(s), {self.n_layers_in_gpu} layer(s)/chunk", flush=True)
+
+            for chunk_idx, chunk in enumerate(tqdm(chunks,
                               desc=f'running layer chunks({self.running_device})',
-                              total=len(chunks)):
+                              total=n_chunks)):
 
                 # --- Load all layers in this chunk into GPU ---
+                chunk_layer_names = [ln for _, ln, _ in chunk]
+                print(f"[AirLLM] Chunk {chunk_idx+1}/{n_chunks}: loading {chunk_layer_names}", flush=True)
                 chunk_moved = []  # list of (layer, moved_layer_names)
                 for ci, (i, layer_name, layer) in enumerate(chunk):
                     if self.prefetching:
@@ -509,6 +592,7 @@ class AirLLMBaseModel(GenerationMixin):
 
                     chunk_moved.append((i, layer_name, layer, moved_layers))
 
+                print(f"[AirLLM] Chunk {chunk_idx+1}/{n_chunks}: running layers", flush=True)
                 # --- Run batch through all layers in this chunk ---
                 for (i, layer_name, layer, moved_layers) in chunk_moved:
                     for j, seq in enumerate(batch):
@@ -523,6 +607,9 @@ class AirLLMBaseModel(GenerationMixin):
                         elif layer_name == self.layer_names_dict['lm_head']:
                             batch[j] = self.run_lm_head(layer, seq)
                         else:
+                            # NaN check on input
+                            if torch.isnan(seq).any() or torch.isinf(seq).any():
+                                print(f"[AirLLM] NaN/Inf DETECTED IN INPUT to {layer_name} (chunk {chunk_idx+1})", flush=True)
 
                             if output_attentions:
                                 all_hidden_states[i].append(new_seq)
@@ -560,18 +647,22 @@ class AirLLMBaseModel(GenerationMixin):
                                 position_ids_args = self.get_position_ids_args(position_ids, 0, len_seq)
 
                                 if not use_cache:
-                                    kwargs = {'use_cache': False,
-                                              'attention_mask': attention_mask[:, :, -len_seq:, -len_seq:]}
+                                    kwargs = {'use_cache': False}
                                     kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
-                                    new_seq = layer(seq, **kwargs)[0]
+                                    new_seq, _ = self.run_layer(layer, seq, **kwargs)
                                 else:
-                                    kwargs = {'use_cache': True,
-                                              'attention_mask': attention_mask[:, :, -len_seq:, -len_seq:]}
+                                    kwargs = {'use_cache': True}
                                     kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
                                     layer_out = layer(seq, **kwargs)
                                     new_seq, (k_cache, v_cache) = layer_out
                                     kv_cache_list[i][0].append(k_cache)
                                     kv_cache_list[i][1].append(v_cache)
+
+                            # NaN check on output
+                            if torch.isnan(new_seq).any() or torch.isinf(new_seq).any():
+                                nan_pct = torch.isnan(new_seq).float().mean().item() * 100
+                                inf_pct = torch.isinf(new_seq).float().mean().item() * 100
+                                print(f"[AirLLM] NaN/Inf DETECTED IN OUTPUT of {layer_name} (chunk {chunk_idx+1}): nan={nan_pct:.1f}% inf={inf_pct:.1f}%", flush=True)
 
                             batch[j] = new_seq
 
