@@ -51,6 +51,8 @@ class AirLLMBaseModel(GenerationMixin):
                        'layer_prefix': 'model.layers',
                        'norm': 'model.norm',
                        'lm_head': 'lm_head',}
+        # Initialize rotary embedding cache
+        self._rotary_emb_cache = None
 
 
 
@@ -300,8 +302,17 @@ class AirLLMBaseModel(GenerationMixin):
         return state_dict
 
     def move_layer_to_device(self, state_dict):
-        layers = []
+        # Filter out parameters that don't exist in newer transformers versions
+        # (e.g., rotary_emb which is now computed dynamically)
+        filtered_state_dict = {}
         for param_name, param in state_dict.items():
+            # Skip rotary_emb parameters - they're computed dynamically in newer transformers
+            if 'rotary_emb' in param_name:
+                continue
+            filtered_state_dict[param_name] = param
+        
+        layers = []
+        for param_name, param in filtered_state_dict.items():
             if self.hf_quantizer is None:
                 layers.append(param_name)
             else:
@@ -314,12 +325,12 @@ class AirLLMBaseModel(GenerationMixin):
             if (self.hf_quantizer is None or
                 not self.hf_quantizer.check_quantized_param(self.model, param_value=None, param_name=param_name, state_dict={})
                ):
-                set_module_tensor_to_device(self.model, param_name, self.running_device, value=state_dict[param_name],
+                set_module_tensor_to_device(self.model, param_name, self.running_device, value=filtered_state_dict[param_name],
                                             dtype=self.running_dtype,
                                             )
             else:
                 torch_dtype = self.hf_quantizer.update_torch_dtype(None)
-                self.hf_quantizer.create_quantized_param(self.model, state_dict[param_name], param_name, self.running_device, state_dict)
+                self.hf_quantizer.create_quantized_param(self.model, filtered_state_dict[param_name], param_name, self.running_device, filtered_state_dict)
         return layers
 
     # make GenerationMixin happy
@@ -374,6 +385,55 @@ class AirLLMBaseModel(GenerationMixin):
         return seq.shape[1]
 
     def get_pos_emb_args(self, len_p, len_s):
+        # For transformers 4.36+, we need to compute position_embeddings (rotary embeddings)
+        # and pass them to each layer
+        try:
+            seq_len = len_p + len_s
+            
+            # Check if model has rotary_emb module (for Llama and similar models)
+            if hasattr(self.model, 'model') and hasattr(self.model.model, 'rotary_emb'):
+                rotary_emb = self.model.model.rotary_emb
+                position_ids = torch.arange(seq_len, dtype=torch.long, device=self.running_device).unsqueeze(0)
+                head_dim = self.config.hidden_size // self.config.num_attention_heads
+                dummy_input = torch.zeros((1, seq_len, head_dim), device=self.running_device, dtype=self.running_dtype or torch.float16)
+                cos, sin = rotary_emb(dummy_input, position_ids)
+                return {'position_embeddings': (cos, sin)}
+            elif hasattr(self.model, 'model') and hasattr(self.model.model, 'layers') and len(self.model.model.layers) > 0:
+                # Try to get rotary_emb from the first layer's self_attn
+                first_layer = self.model.model.layers[0]
+                if hasattr(first_layer, 'self_attn') and hasattr(first_layer.self_attn, 'rotary_emb'):
+                    rotary_emb = first_layer.self_attn.rotary_emb
+                    position_ids = torch.arange(seq_len, dtype=torch.long, device=self.running_device).unsqueeze(0)
+                    head_dim = self.config.hidden_size // self.config.num_attention_heads
+                    dummy_input = torch.zeros((1, seq_len, head_dim), device=self.running_device, dtype=self.running_dtype or torch.float16)
+                    cos, sin = rotary_emb(dummy_input, position_ids)
+                    return {'position_embeddings': (cos, sin)}
+            
+            # Fallback: Initialize rotary embeddings manually based on config
+            # This is needed when the model is created with init_empty_weights()
+            if self._rotary_emb_cache is None:
+                from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
+                # Get rotary embedding config from model config
+                head_dim = self.config.hidden_size // self.config.num_attention_heads
+                self._rotary_emb_cache = LlamaRotaryEmbedding(
+                    head_dim,
+                    max_position_embeddings=self.config.max_position_embeddings,
+                    base=getattr(self.config, 'rope_theta', 10000.0),
+                    device=self.running_device
+                )
+            
+            position_ids = torch.arange(seq_len, dtype=torch.long, device=self.running_device).unsqueeze(0)
+            head_dim = self.config.hidden_size // self.config.num_attention_heads
+            # Create a dummy input tensor for rotary_emb
+            dummy_input = torch.zeros((1, seq_len, head_dim), device=self.running_device, dtype=self.running_dtype or torch.float16)
+            cos, sin = self._rotary_emb_cache(dummy_input, position_ids)
+            return {'position_embeddings': (cos, sin)}
+            
+        except Exception as e:
+            # If anything fails, fall back to empty dict (for older transformers versions)
+            print(f"Warning: Failed to compute position_embeddings: {e}")
+            import traceback
+            traceback.print_exc()
         return {}
 
     def get_past_key_value_args(self, k_cache, v_cache):
