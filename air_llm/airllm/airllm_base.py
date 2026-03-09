@@ -48,6 +48,7 @@ except ImportError:
 
 
 class AirLLMBaseModel(GenerationMixin):
+    _is_stateful = False
 
     # customize layer names here
     def set_layer_names_dict(self):
@@ -317,14 +318,27 @@ class AirLLMBaseModel(GenerationMixin):
 
         for param_name in layers:
             if (self.hf_quantizer is None or
-                not self.hf_quantizer.check_quantized_param(self.model, param_value=None, param_name=param_name, state_dict={})
+                not self.hf_quantizer.param_needs_quantization(self.model, param_name)
                ):
                 set_module_tensor_to_device(self.model, param_name, self.running_device, value=state_dict[param_name],
                                             dtype=self.running_dtype,
                                             )
             else:
-                torch_dtype = self.hf_quantizer.update_torch_dtype(None)
-                self.hf_quantizer.create_quantized_param(self.model, state_dict[param_name], param_name, self.running_device, state_dict)
+                # Weights are already quantized (uint8 + quant_state metadata).
+                # Reconstruct Params4bit directly instead of re-quantizing.
+                quant_state_dict = {k[len(param_name) + 1:]: v for k, v in state_dict.items()
+                                    if k.startswith(param_name + ".") and k != param_name}
+                quant_state = bnb.functional.QuantState.from_dict(qs_dict=quant_state_dict, device=self.running_device)
+                new_value = bnb.nn.Params4bit(state_dict[param_name].to(self.running_device),
+                                              requires_grad=False,
+                                              quant_state=quant_state,
+                                              bnb_quantized=True)
+                # Set directly on module to avoid accelerate re-creating Params4bit
+                parts = param_name.split(".")
+                module = self.model
+                for part in parts[:-1]:
+                    module = getattr(module, part)
+                setattr(module, parts[-1], new_value)
         return layers
 
     # make GenerationMixin happy
@@ -374,6 +388,8 @@ class AirLLMBaseModel(GenerationMixin):
         return self.forward(*args, **kwargs)
 
     def get_past_key_values_cache_seq_len(self, past_key_values):
+        if cache_utils_installed and isinstance(past_key_values, DynamicCache):
+            return past_key_values.get_seq_length()
         return past_key_values[0][0].shape[2]
     def get_sequence_len(self, seq):
         return seq.shape[1]
@@ -415,6 +431,7 @@ class AirLLMBaseModel(GenerationMixin):
         if cache_utils_installed:
             # we don't support kv cache for new version yet
             use_cache = False
+            past_key_values = None
 
         if self.profiling_mode:
             self.profiler.clear_profiling_time()
@@ -435,6 +452,11 @@ class AirLLMBaseModel(GenerationMixin):
         attention_mask = attention_mask.triu(diagonal=1)[None, None, ...] == 0
         attention_mask = attention_mask.to(self.running_device)
         position_ids = torch.arange(self.max_seq_len, dtype=torch.long, device=self.running_device)[None, :]
+
+        # Check if we need to compute position embeddings for new transformers versions
+        self._rotary_emb = None
+        if hasattr(self.model, 'model') and hasattr(self.model.model, 'rotary_emb'):
+            self._rotary_emb = self.model.model.rotary_emb
 
         kv_cache_list = [] if use_cache else None
         if use_cache:
@@ -535,12 +557,15 @@ class AirLLMBaseModel(GenerationMixin):
                             pos_embed_args = self.get_pos_emb_args(len_p, len_s)
                             kwargs = {**kwargs, **past_key_value_args, **pos_embed_args, **attention_mask_args,
                                       **position_ids_args}
+                            if self._rotary_emb is not None:
+                                pos_ids = position_ids_args.get('position_ids', position_ids[:, len_p:len_p + len_s])
+                                kwargs['position_embeddings'] = self._rotary_emb(seq, pos_ids)
 
 
                             layer_outputs = layer(seq,
                                                   **kwargs
                                                   )
-                            new_seq = layer_outputs[0]
+                            new_seq = layer_outputs if isinstance(layer_outputs, torch.Tensor) else layer_outputs[0]
 
                             if output_attentions:
                                 all_self_attns[i].append(layer_outputs[1])
@@ -569,15 +594,22 @@ class AirLLMBaseModel(GenerationMixin):
                                           'attention_mask': attention_mask[:, :, -len_seq:, -len_seq:],
                                           }
                                 kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
+                                if self._rotary_emb is not None:
+                                    pos_ids = position_ids_args.get('position_ids', position_ids[:, :len_seq])
+                                    kwargs['position_embeddings'] = self._rotary_emb(seq, pos_ids)
 
 
-                                new_seq = layer(seq, **kwargs)[0]
+                                layer_out = layer(seq, **kwargs)
+                                new_seq = layer_out if isinstance(layer_out, torch.Tensor) else layer_out[0]
                             else:
 
                                 kwargs = {'use_cache': True,
                                           'attention_mask': attention_mask[:, :, -len_seq:, -len_seq:],
                                           }
                                 kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
+                                if self._rotary_emb is not None:
+                                    pos_ids = position_ids_args.get('position_ids', position_ids[:, :len_seq])
+                                    kwargs['position_embeddings'] = self._rotary_emb(seq, pos_ids)
 
                                 layer_out = layer(seq, **kwargs)
 

@@ -29,6 +29,14 @@
 * [Best AI Facial Expression Editor](https://crazyfaceai.com)
 
 ## Updates
+[2026/03/09] Compatibility fixes for transformers 5.x, bitsandbytes 0.49+, and PyTorch 2.10+:
+- Made `optimum.bettertransformer` import optional (no longer required)
+- Fixed `_is_stateful` attribute for `GenerationMixin` compatibility
+- Fixed `DynamicCache` handling (no longer subscriptable in transformers 5.x)
+- Fixed pre-quantized 4-bit weight loading (`check_quantized_param` -> `param_needs_quantization`)
+- Fixed decoder layer output handling (now returns tensor, not tuple)
+- Added `position_embeddings` support for new rotary embedding API
+
 [2024/08/20] v2.11.0: Support Qwen2.5
 
 [2024/08/18] v2.10.1 Support CPU inference. Support non sharded models. Thanks @NavodPeiris for the great work! 
@@ -72,7 +80,13 @@
 
 ### 1. Install package
 
-First, install the airllm pip package.
+First, install PyTorch with CUDA support (required for GPU inference):
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu126
+```
+
+Then install the airllm pip package:
 
 ```bash
 pip install airllm
