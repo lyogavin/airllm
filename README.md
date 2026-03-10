@@ -1,6 +1,7 @@
 ![airllm_logo](https://github.com/lyogavin/airllm/blob/main/assets/airllm_logo_sm.png?v=3&raw=true)
 
 [**Quickstart**](#quickstart) | 
+[**Web UI**](#web-ui-local-app) | 
 [**Configurations**](#configurations) | 
 [**MacOS**](#macos) | 
 [**Example notebooks**](#example-python-notebook) | 
@@ -60,6 +61,7 @@
 ## Table of Contents
 
 * [Quick start](#quickstart)
+* [Web UI (Local App)](#web-ui-local-app)
 * [Model Compression](#model-compression---3x-inference-speed-up)
 * [Configurations](#configurations)
 * [Run on MacOS](#macos)
@@ -121,6 +123,77 @@ print(output)
  
 Note: During inference, the original model will first be decomposed and saved layer-wise. Please ensure there is sufficient disk space in the huggingface cache directory.
  
+## Web UI (Local App)
+
+This project also includes a local web interface in `app.py` for chat, model settings, and Hugging Face downloads.
+
+### Start the web app
+
+```bash
+pip install -r requirements.txt
+python app.py
+```
+
+Open `http://127.0.0.1:8000`.
+
+Dependency note:
+* `transformers` is intentionally pinned to `4.56.2` for runtime compatibility with this app.
+* Avoid upgrading `transformers` to latest unless you are testing compatibility changes.
+
+### First-run setup (recommended)
+
+1. Open the **Settings** tab.
+2. In **Model Config**, set:
+   * `AIRLLM_MODEL_BASE_DIR` to your local model directory root (for example `O:\\AI\\Models`).
+   * `AIRLLM_DEVICE` to `cuda:0` (or `cpu` if no CUDA GPU is available).
+3. Click **Scan Base Directory** to detect compatible local model folders.
+4. Select a model from **Discovered Models** (or set `AIRLLM_MODEL_PATH` manually).
+5. Click **Load / Reload Model**.
+6. Go to **Chat** and send a prompt.
+
+### Downloading models from the UI
+
+1. Open **Settings -> Hugging Face Download**.
+2. Enter the model repo ID (for example `Qwen/Qwen3-Coder-Next`).
+3. Optionally set revision, target subdir, and allow/ignore patterns.
+4. Click **Download from Hugging Face**.
+5. Monitor progress in **Download Progress** (status, file counts, logs).
+6. If enabled, **Set downloaded model as active** updates `AIRLLM_MODEL_PATH` automatically after download.
+
+Notes:
+* The web UI tracks one active download job at a time.
+* Reloading the page reconnects to an in-progress download job.
+* AirLLM loading in this UI expects **Transformers-style model directories** (`config.json` + weight files), not GGUF-only folders.
+
+### UI overview
+
+* **Chat tab**: send prompts to the loaded model (`Enter` sends, `Shift+Enter` adds a newline).
+* **Settings -> Model Config**: configure `AIRLLM_MODEL_ID`, `AIRLLM_MODEL_PATH`, `AIRLLM_MODEL_BASE_DIR`, and `AIRLLM_DEVICE`; scan the base directory for compatible local Transformers models.
+* **Settings -> Hugging Face Download**: download a model into the base directory with revision/pattern filters, with live progress logs in the UI.
+* **Download persistence**: if a download is already running, reloading the page reconnects to the active job and restores progress.
+* **Dark mode**: toggle from the top bar.
+
+### Environment variables used by the web app
+
+* `AIRLLM_MODEL_ID`: model repo id (for example `TinyLlama/TinyLlama-1.1B-Chat-v1.0`).
+* `AIRLLM_MODEL_PATH`: explicit local model directory; overrides base-dir resolution when set.
+* `AIRLLM_MODEL_BASE_DIR`: root folder used for model scans and HF downloads.
+* `AIRLLM_DEVICE`: runtime device (for example `cuda:0` or `cpu`).
+* `HF_TOKEN`: optional Hugging Face token for gated/private repositories.
+* `PORT`: web server port (default `8000`).
+
+When **Persist selected values to project `.env`** is enabled in Settings, changes are written back to the local `.env` file.
+
+### Access from other machines on your network
+
+By default the app binds to localhost. To expose it on your LAN, run:
+
+```bash
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+Then open `http://<your-machine-ip>:8000` from another device on the same network.
+
 
 ## Model Compression - 3x Inference Speed Up!
 
@@ -334,3 +407,4 @@ Welcomed contributions, ideas and discussions!
 If you find it useful, please ⭐ or buy me a coffee! 🙏
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://bmc.link/lyogavinQ)
+

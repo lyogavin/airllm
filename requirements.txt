@@ -1,5 +1,5 @@
 bitsandbytes==0.39.0
-transformers @ git+https://github.com/huggingface/transformers.git
+transformers==4.56.2
 peft @ git+https://github.com/huggingface/peft.git@v0.3.0
 accelerate @ git+https://github.com/huggingface/accelerate.git@v0.20.3
 einops==0.6.1
@@ -7,3 +7,4 @@ evaluate==0.4.0
 scikit-learn==1.2.2
 sentencepiece==0.1.99
 wandb==0.15.3
+
