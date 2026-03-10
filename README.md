@@ -29,6 +29,20 @@
 * [Best AI Facial Expression Editor](https://crazyfaceai.com)
 
 ## Updates
+[2026/03/09] GPU utilisation optimisations for significantly faster inference:
+- **Multi-layer GPU batching**: loads multiple layers onto GPU simultaneously, computes them back-to-back, and cleans up once per batch instead of per layer. Auto-sizes based on available VRAM.
+- **Model reuse between forward passes**: reuses the model skeleton instead of deleting and recreating it every forward call. Eliminates repeated BetterTransformer/SDPA detection overhead.
+- **Cached batch sizing**: layer size estimation and batch calculation only performed once, not every forward pass.
+- New `layers_per_batch` parameter: `"auto"` (default) to auto-detect, an integer to set manually, or `1` for original behaviour.
+
+[2026/03/09] Compatibility fixes for transformers 5.x, bitsandbytes 0.49+, and PyTorch 2.10+:
+- Made `optimum.bettertransformer` import optional (no longer required)
+- Fixed `_is_stateful` attribute for `GenerationMixin` compatibility
+- Fixed `DynamicCache` handling (no longer subscriptable in transformers 5.x)
+- Fixed pre-quantized 4-bit weight loading (`check_quantized_param` -> `param_needs_quantization`)
+- Fixed decoder layer output handling (now returns tensor, not tuple)
+- Added `position_embeddings` support for new rotary embedding API
+
 [2024/08/20] v2.11.0: Support Qwen2.5
 
 [2024/08/18] v2.10.1 Support CPU inference. Support non sharded models. Thanks @NavodPeiris for the great work! 
@@ -72,7 +86,13 @@
 
 ### 1. Install package
 
-First, install the airllm pip package.
+First, install PyTorch with CUDA support (required for GPU inference):
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu126
+```
+
+Then install the airllm pip package:
 
 ```bash
 pip install airllm
@@ -155,7 +175,8 @@ When initialize the model, we support the following configurations:
 * **layer_shards_saving_path**: optionally another path to save the splitted model
 * **hf_token**: huggingface token can be provided here if downloading gated models like: *meta-llama/Llama-2-7b-hf*
 * **prefetching**: prefetching to overlap the model loading and compute. By default, turned on. For now, only AirLLMLlama2 supports this.
-* **delete_original**: if you don't have too much disk space, you can set delete_original to true to delete the original downloaded hugging face model, only keep the transformed one to save half of the disk space. 
+* **delete_original**: if you don't have too much disk space, you can set delete_original to true to delete the original downloaded hugging face model, only keep the transformed one to save half of the disk space.
+* **layers_per_batch**: number of layers to load onto GPU simultaneously. `"auto"` (default) calculates the optimal number based on available GPU memory. Set to an integer to override, or `1` for original single-layer behaviour.
 
 ## MacOS
 
