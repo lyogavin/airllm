@@ -29,6 +29,10 @@
 * [Best AI Facial Expression Editor](https://crazyfaceai.com)
 
 ## Updates
+[2025/02/18] v2.13.0: Auto VRAM detection — AirLLM now automatically detects available GPU VRAM and loads as many layers as will fit simultaneously, reducing disk I/O overhead. Override with `n_layers_in_gpu` parameter.
+
+[2025/02/18] v2.12.0: Support Qwen3.5 MoE (e.g. Qwen3.5-397B-A17B). Fixed shard filename detection, cross-volume space check, and layer naming for multimodal MoE architectures.
+
 [2024/08/20] v2.11.0: Support Qwen2.5
 
 [2024/08/18] v2.10.1 Support CPU inference. Support non sharded models. Thanks @NavodPeiris for the great work! 
@@ -155,7 +159,18 @@ When initialize the model, we support the following configurations:
 * **layer_shards_saving_path**: optionally another path to save the splitted model
 * **hf_token**: huggingface token can be provided here if downloading gated models like: *meta-llama/Llama-2-7b-hf*
 * **prefetching**: prefetching to overlap the model loading and compute. By default, turned on. For now, only AirLLMLlama2 supports this.
-* **delete_original**: if you don't have too much disk space, you can set delete_original to true to delete the original downloaded hugging face model, only keep the transformed one to save half of the disk space. 
+* **delete_original**: if you don't have too much disk space, you can set delete_original to true to delete the original downloaded hugging face model, only keep the transformed one to save half of the disk space.
+* **n_layers_in_gpu**: number of transformer layers to load into GPU simultaneously. By default (`None`), AirLLM auto-detects how many layers fit in your currently available VRAM (with a 20% safety margin for activations). Set manually to override — e.g. `n_layers_in_gpu=2` for large MoE models, `n_layers_in_gpu=8` for smaller models on high-VRAM GPUs.
+
+```python
+# Auto-detect (recommended) — uses all available VRAM efficiently
+model = AutoModel.from_pretrained("garage-bAInd/Platypus2-70B-instruct")
+
+# Manual override — useful if auto-detection is too aggressive
+model = AutoModel.from_pretrained("garage-bAInd/Platypus2-70B-instruct",
+                     n_layers_in_gpu=4
+                    )
+``` 
 
 ## MacOS
 
@@ -217,6 +232,29 @@ input_tokens = model.tokenizer(input_text,
 generation_output = model.generate(
     input_tokens['input_ids'].cuda(), 
     max_new_tokens=5,
+    use_cache=True,
+    return_dict_in_generate=True)
+model.tokenizer.decode(generation_output.sequences[0])
+```
+
+* Qwen3.5 MoE (e.g. Qwen3.5-397B-A17B):
+
+```python
+from airllm import AutoModel
+MAX_LENGTH = 128
+# AutoModel automatically detects Qwen3.5 MoE architecture
+model = AutoModel.from_pretrained("Qwen/Qwen3.5-397B-A17B",
+    layer_shards_saving_path="/path/to/cache/layer_shards"  # recommended for large models
+)
+input_text = ['What is the capital of China?',]
+input_tokens = model.tokenizer(input_text,
+    return_tensors="pt",
+    return_attention_mask=False,
+    truncation=True,
+    max_length=MAX_LENGTH)
+generation_output = model.generate(
+    input_tokens['input_ids'].cuda(),
+    max_new_tokens=20,
     use_cache=True,
     return_dict_in_generate=True)
 model.tokenizer.decode(generation_output.sequences[0])

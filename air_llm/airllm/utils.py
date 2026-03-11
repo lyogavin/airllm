@@ -82,6 +82,80 @@ def clean_memory():
     torch.cuda.empty_cache()
 
 
+def calculate_n_layers_in_gpu(checkpoint_path, layer_names, device="cuda:0", vram_safety_margin=0.8,
+                              layer_shards_saving_path=None):
+    """
+    Auto-detect how many layers can fit in currently available VRAM.
+
+    Parameters
+    ----------
+    checkpoint_path : Path
+        Path to the original model directory.
+    layer_names : list of str
+        Ordered list of layer names (embed, layers.0..N, norm, lm_head).
+    device : str
+        CUDA device string, e.g. "cuda:0".
+    vram_safety_margin : float
+        Fraction of free VRAM to use (default 0.8 = 80%, leaving 20% for activations).
+    layer_shards_saving_path : str or Path, optional
+        Path where layer shards are cached. If provided, layer sizes are read from here.
+
+    Returns
+    -------
+    int
+        Number of layers to load into GPU simultaneously (at least 1).
+    """
+    if not torch.cuda.is_available() or not device.startswith("cuda"):
+        return 1
+
+    try:
+        device_idx = int(device.split(":")[-1]) if ":" in device else 0
+        free_bytes, _ = torch.cuda.mem_get_info(device_idx)
+        usable_bytes = int(free_bytes * vram_safety_margin)
+
+        # Determine where to look for layer shard files.
+        # checkpoint_path is already the splitted_model dir (returned by find_or_create_local_splitted_path).
+        # Also check layer_shards_saving_path/splitted_model as a fallback.
+        search_paths = [Path(checkpoint_path)]
+        if layer_shards_saving_path is not None:
+            search_paths.append(Path(layer_shards_saving_path) / "splitted_model")
+            search_paths.append(Path(layer_shards_saving_path))
+
+        # Estimate average layer size from the transformer layers (skip embed/norm/lm_head)
+        transformer_layer_names = [n for n in layer_names
+                                   if n not in (layer_names[0], layer_names[-1], layer_names[-2])]
+
+        MIN_REAL_LAYER_BYTES = 1024 * 1024  # 1MB — stubs are 16 bytes
+        layer_sizes = []
+        # Sample up to 5 transformer layers, skipping stubs
+        for layer_name in transformer_layer_names:
+            if len(layer_sizes) >= 5:
+                break
+            for search_path in search_paths:
+                layer_file = search_path / (layer_name + ".safetensors")
+                size = layer_file.stat().st_size if layer_file.exists() else 0
+                if size >= MIN_REAL_LAYER_BYTES:
+                    layer_sizes.append(size)
+                    break
+
+        if not layer_sizes:
+            print(f"Auto VRAM detection: could not find layer shard files to estimate size, defaulting to 1 layer per pass.")
+            return 1
+
+        avg_layer_bytes = sum(layer_sizes) / len(layer_sizes)
+        n_layers = max(1, int(usable_bytes / avg_layer_bytes))
+        n_layers = min(n_layers, len(layer_names))
+
+        print(f"Auto VRAM detection: {free_bytes / 1024**3:.1f}GB free, "
+              f"avg layer size {avg_layer_bytes / 1024**3:.2f}GB → loading {n_layers} layer(s) per pass")
+
+        return n_layers
+
+    except Exception as e:
+        print(f"VRAM auto-detection failed ({e}), defaulting to 1 layer per pass.")
+        return 1
+
+
 def uncompress_layer_state_dict(layer_state_dict):
     uncompressed_layer_state_dict = None
     if any(['4bit' in k for k in layer_state_dict.keys()]):
@@ -132,26 +206,32 @@ def load_layer(local_path, layer_name, profiling=False):
 
 
 def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None, splitted_model_dir_name='splitted_model'):
+    # When a separate saving path is provided the split layers are a reorganization of the
+    # source data (same total bytes, not additive), so a cross-path size check is meaningless.
+    # Only check space when splitting in-place (no separate saving path).
+    if layer_shards_saving_path is not None:
+        print(f"Separate layer_shards_saving_path provided, skipping space check.")
+        return
+
     total_shard_files_size_bytes = 0
     for model_shard_file in glob(str(checkpoint_path / '*')):
         total_shard_files_size_bytes += os.path.getsize(model_shard_file)
 
     total_saved_split_files_size_bytes = 0
-    if layer_shards_saving_path is not None:
-        for saved_split_file in glob(str(Path(layer_shards_saving_path) / splitted_model_dir_name / '*')):
-            total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
+    for saved_split_file in glob(str(checkpoint_path / splitted_model_dir_name / '*')):
+        total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
 
     if compression == '4bit':
         total_shard_files_size_bytes = int(total_shard_files_size_bytes / 0.2813)
     elif compression == '8bit':
         total_shard_files_size_bytes = total_shard_files_size_bytes // 2
 
-    total, used, free = shutil.disk_usage(checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path)
+    total, used, free = shutil.disk_usage(checkpoint_path)
 
     if free + total_saved_split_files_size_bytes < total_shard_files_size_bytes:
-        raise NotEnoughSpaceException(f"Not enough space. Free space under {checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path}:"  \
+        raise NotEnoughSpaceException(f"Not enough space. Free space under {checkpoint_path}:"  \
                                       f" {free / 1024 / 1024 / 1024:.02f}GB. Model total size: {total_shard_files_size_bytes / 1024 / 1024 / 1024:.02f}GB. " \
-                                      f"existing space under {checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path} assuming can reuse: {total_saved_split_files_size_bytes/ 1024 / 1024 / 1024:.02f}GB. "
+                                      f"existing space under {checkpoint_path} assuming can reuse: {total_saved_split_files_size_bytes/ 1024 / 1024 / 1024:.02f}GB. "
                                       )
 
 def compress_layer_state_dict(layer_state_dict, compression=None):
@@ -205,19 +285,33 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
 
     safetensors_format = False
+    single_shard_file = None  # set when model is a single safetensors file with no index
     if os.path.exists(checkpoint_path / 'pytorch_model.bin.index.json'):
         with open(checkpoint_path / 'pytorch_model.bin.index.json', 'rb') as f:
             index = json.load(f)['weight_map']
-    else:
+    elif os.path.exists(checkpoint_path / 'model.safetensors.index.json'):
         safetensors_format = True
-        assert os.path.exists(checkpoint_path / 'model.safetensors.index.json'), f'model.safetensors.index.json should exist.'
         with open(checkpoint_path / 'model.safetensors.index.json', 'rb') as f:
             index = json.load(f)['weight_map']
+    elif os.path.exists(checkpoint_path / 'model.safetensors'):
+        # Single-shard safetensors (e.g. GPTQ models) — build index from file metadata
+        safetensors_format = True
+        single_shard_file = 'model.safetensors'
+        from safetensors import safe_open
+        with safe_open(str(checkpoint_path / 'model.safetensors'), framework='pt', device='cpu') as f:
+            index = {k: single_shard_file for k in f.keys()}
+        print(f"Single-shard safetensors detected: {len(index)} tensors in {single_shard_file}")
+    else:
+        raise FileNotFoundError(
+            f"No model weight files found in {checkpoint_path}. "
+            "Expected model.safetensors.index.json, model.safetensors, or pytorch_model.bin.index.json."
+        )
 
     if layer_names is None:
         n_layers = len(set([int(k.split('.')[2]) for k in index.keys() if 'model.layers' in k]))
     else:
-        n_layers = len(set([int(k[len(layer_names['layer_prefix']):].split('.')[1]) for k in index.keys() if layer_names['layer_prefix'] in k]))
+        prefix_dot = layer_names['layer_prefix'] + '.'
+        n_layers = len(set([int(k[len(prefix_dot):].split('.')[0]) for k in index.keys() if k.startswith(prefix_dot)]))
 
     if layer_names is None:
         layers = ['model.embed_tokens.'] + [f'model.layers.{i}.' for i in range(n_layers)] + ['model.norm.', 'lm_head.']
@@ -251,83 +345,98 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         check_space(checkpoint_path, layer_shards_saving_path, compression, splitted_model_dir_name=splitted_model_dir_name)
 
 
-    shard = 0
-    n_shards = len(set(index.values()))
-    state_dict = {}
-
+    all_shard_files = sorted(set(index.values()))
+    n_shards = len(all_shard_files)
 
     if not os.path.exists(saving_path):
-        #os.makedirs(saving_path)
         saving_path.mkdir(parents=True, exist_ok=True)
 
     single_modelfile = None
 
-    for layer in tqdm(layers):
+    # Build a reverse map: shard_file -> list of keys it contains
+    shard_to_keys = {}
+    for k, v in index.items():
+        shard_to_keys.setdefault(v, []).append(k)
 
-        # Optionnally load next shard
-        # checking whether after spliting from '-', if second element exists. otherwise it throws errors for single 'model.safetensor' files
-        shards = [int(v.split('-')[1]) for k, v in index.items() if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
-        if len(shards) > 0:
-            if max(shards) > shard:
-                # optinoally delete original file
-                if delete_original and shard != 0:
+    # For single-shard safetensors, keep the file open across all layers to avoid
+    # re-reading the full file (e.g. 16 GB) once per layer.
+    _single_shard_handle = None
+    if single_shard_file is not None and safetensors_format:
+        from safetensors import safe_open
+        _single_shard_handle = safe_open(
+            str(checkpoint_path / single_shard_file), framework='pt', device='cpu'
+        )
+
+    try:
+        for layer_idx, layer in enumerate(tqdm(layers)):
+
+            # Check if already done
+            if ModelPersister.get_model_persister().model_persist_exist(layer, saving_path):
+                continue
+
+            # Get ALL shard files that contain keys for this layer
+            layer_keys_needed = set(k for k in index if k.startswith(layer))
+            if not layer_keys_needed:
+                # No keys for this layer in the index — skip (no stub written)
+                continue
+
+            shard_files_for_layer = set(index[k] for k in layer_keys_needed)
+
+            # Streaming: load one shard at a time, extract only this layer's keys, free immediately
+            layer_state_dict = {}
+
+            if _single_shard_handle is not None:
+                # Single-shard: use the already-open handle, read only this layer's tensors
+                for k in layer_keys_needed:
+                    layer_state_dict[k] = _single_shard_handle.get_tensor(k)
+            elif n_shards > 1:
+                for shard_file in sorted(shard_files_for_layer):
+                    to_load = checkpoint_path / shard_file
+                    if not os.path.exists(to_load):
+                        assert repo_id is not None, f"Shard file {to_load} not found locally and no repo_id provided for download."
+                        huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
+                                                        token=hf_token)
+                    print(f'Layer {layer_idx}: streaming shard {shard_file}')
                     if not safetensors_format:
-                        to_delete = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
+                        shard_data = torch.load(to_load, map_location='cpu')
                     else:
-                        to_delete = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
-
-                    print(f"deleting original file: {to_delete}")
-                    remove_real_and_linked_file(to_delete)
-                shard += 1
-                print(f'Loading shard {shard}/{n_shards}')
-
-                if not safetensors_format:
-                    to_load = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
-                else:
-                    to_load = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
-
-                # check if to_load exist, if not downloaad it...
+                        shard_data = load_file(to_load, device='cpu')
+                    # Extract only the keys belonging to this layer
+                    for k in shard_to_keys.get(shard_file, []):
+                        if k.startswith(layer):
+                            layer_state_dict[k] = shard_data[k]
+                    # Free the full shard immediately
+                    del shard_data
+                    clean_memory()
+            else:
+                shard_files = list(shard_files_for_layer)
+                single_modelfile = shard_files[0]
+                to_load = checkpoint_path / single_modelfile
                 if not os.path.exists(to_load):
-                    assert repo_id is not None
+                    assert repo_id is not None, f"Shard file {to_load} not found locally and no repo_id provided for download."
                     huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
                                                     token=hf_token)
-
                 if not safetensors_format:
-                    state_dict.update(torch.load(to_load, map_location='cpu'))
+                    shard_data = torch.load(to_load, map_location='cpu')
                 else:
-                    state_dict.update(load_file(to_load, device='cpu'))
+                    shard_data = load_file(to_load, device='cpu')
+                for k in layer_keys_needed:
+                    if k in shard_data:
+                        layer_state_dict[k] = shard_data[k]
+                del shard_data
+                clean_memory()
 
-        else:
-            shards = [v for k, v in index.items() if k.startswith(layer)]
-            single_modelfile = shards[0]
-            to_load = checkpoint_path / single_modelfile
-            # check if to_load exist, if not downloaad it...
-            if not os.path.exists(to_load):
-                assert repo_id is not None
-                huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
-                                                token=hf_token)
-            if not safetensors_format:
-                state_dict.update(torch.load(to_load, map_location='cpu'))
-            else:
-                state_dict.update(load_file(to_load, device='cpu'))
+            layer_state_dict = compress_layer_state_dict(layer_state_dict, compression)
 
-        # Get layer state dict
-        layer_state_dict = dict([(k, v) for k, v in state_dict.items() if k.startswith(layer)])
-
-        layer_state_dict = compress_layer_state_dict(layer_state_dict, compression)
-
-        # Save layer state dict as using safetensors
-
-        marker_exists = ModelPersister.get_model_persister().model_persist_exist(layer, saving_path)
-        if not marker_exists:
             ModelPersister.get_model_persister().persist_model(layer_state_dict, layer, saving_path)
 
-        # Free memory
-        for k in layer_state_dict.keys():
-            if k in state_dict:
-                del state_dict[k]
-        del layer_state_dict
-        clean_memory()
+            del layer_state_dict
+            clean_memory()
+
+    finally:
+        if _single_shard_handle is not None:
+            del _single_shard_handle
+            clean_memory()
 
     # deleting single modelfile if only a single modelfile was existing in hf repo 
     # and deletion of single modelfile should happen in the end if delete_original=True
@@ -364,9 +473,15 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
 
     # try local model path, if the model exist split and save there
     if os.path.exists(model_local_path_or_repo_id):
-        if os.path.exists(Path(model_local_path_or_repo_id) / 'pytorch_model.bin.index.json') or \
-           os.path.exists(Path(model_local_path_or_repo_id) / 'model.safetensors.index.json'):
-            print(f"found index file...")
+        p = Path(model_local_path_or_repo_id)
+        has_model = (
+            os.path.exists(p / 'pytorch_model.bin.index.json') or
+            os.path.exists(p / 'model.safetensors.index.json') or
+            os.path.exists(p / 'model.safetensors') or          # single-shard (e.g. GPTQ)
+            os.path.exists(p / 'pytorch_model.bin')             # single-shard legacy
+        )
+        if has_model:
+            print(f"found local model files in {model_local_path_or_repo_id}...")
             return Path(model_local_path_or_repo_id), split_and_save_layers(model_local_path_or_repo_id, layer_shards_saving_path,
                                                                             compression=compression, layer_names=layer_names, delete_original=delete_original)
         else:
