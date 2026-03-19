@@ -20,6 +20,7 @@ if platform == "darwin":
 
 import torch
 import torch.nn as nn
+from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
 from .persist import ModelPersister
@@ -208,11 +209,26 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     if os.path.exists(checkpoint_path / 'pytorch_model.bin.index.json'):
         with open(checkpoint_path / 'pytorch_model.bin.index.json', 'rb') as f:
             index = json.load(f)['weight_map']
-    else:
+    elif os.path.exists(checkpoint_path / 'model.safetensors.index.json'):
         safetensors_format = True
-        assert os.path.exists(checkpoint_path / 'model.safetensors.index.json'), f'model.safetensors.index.json should exist.'
         with open(checkpoint_path / 'model.safetensors.index.json', 'rb') as f:
             index = json.load(f)['weight_map']
+    elif os.path.exists(checkpoint_path / 'model.safetensors'):
+        # Single-file safetensors (no shard index) — common for small models <= ~7B
+        safetensors_format = True
+        with safe_open(checkpoint_path / 'model.safetensors', framework='pt', device='cpu') as f:
+            index = {k: 'model.safetensors' for k in f.keys()}
+    elif os.path.exists(checkpoint_path / 'pytorch_model.bin'):
+        # Single-file PyTorch bin (no shard index)
+        _state = torch.load(checkpoint_path / 'pytorch_model.bin', map_location='cpu')
+        index = {k: 'pytorch_model.bin' for k in _state.keys()}
+        del _state
+    else:
+        raise FileNotFoundError(
+            f"No model weights found in {checkpoint_path}. "
+            "Expected one of: pytorch_model.bin.index.json, model.safetensors.index.json, "
+            "model.safetensors, or pytorch_model.bin."
+        )
 
     if layer_names is None:
         n_layers = len(set([int(k.split('.')[2]) for k in index.keys() if 'model.layers' in k]))
