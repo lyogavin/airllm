@@ -386,6 +386,9 @@ class AirLLMBaseModel(GenerationMixin):
         return seq.shape[1]
 
     def get_pos_emb_args(self, len_p, len_s):
+        if getattr(self, '_cached_position_embeddings', None) is not None:
+            cos, sin = self._cached_position_embeddings
+            return {'position_embeddings': (cos[:, len_p:len_p + len_s], sin[:, len_p:len_p + len_s])}
         return {}
 
     def get_past_key_value_args(self, k_cache, v_cache):
@@ -443,6 +446,25 @@ class AirLLMBaseModel(GenerationMixin):
         attention_mask = attention_mask.to(self.running_device)
         position_ids = torch.arange(self.max_seq_len, dtype=torch.long, device=self.running_device)[None, :]
 
+        # Pre-compute rotary position embeddings for transformers 5.x models.
+        # In transformers >= 5.x, decoder layers no longer compute cos/sin internally;
+        # they must be passed explicitly as position_embeddings=(cos, sin).
+        self._cached_position_embeddings = None
+        _rotary_emb_mod = getattr(getattr(self.model, 'model', None), 'rotary_emb', None)
+        if _rotary_emb_mod is not None:
+            try:
+                # Re-instantiate on CPU so we can compute without meta weights
+                _re = type(_rotary_emb_mod)(self.config)
+                _cpu_pos_ids = position_ids.cpu()
+                _dummy = torch.zeros(1, dtype=torch.float32)  # dtype determines output dtype
+                _cos, _sin = _re(_dummy, _cpu_pos_ids)
+                self._cached_position_embeddings = (
+                    _cos.to(device=self.running_device, dtype=self.running_dtype),
+                    _sin.to(device=self.running_device, dtype=self.running_dtype),
+                )
+            except Exception:
+                pass
+
         kv_cache_list = [] if use_cache else None
         if use_cache:
             for x in self.layers:
@@ -450,7 +472,7 @@ class AirLLMBaseModel(GenerationMixin):
         all_hidden_states = [] * len(self.layers) if output_hidden_states else None
         all_self_attns = [] * len(self.layers) if output_attentions else None
 
-        with torch.inference_mode(), ThreadPoolExecutor() as executor:
+        with torch.no_grad(), ThreadPoolExecutor() as executor:
 
             # Load first layer
             if self.prefetching:
@@ -547,7 +569,12 @@ class AirLLMBaseModel(GenerationMixin):
                             layer_outputs = layer(seq,
                                                   **kwargs
                                                   )
-                            new_seq = layer_outputs[0]
+                            # transformers 5.x decoder layers return a bare tensor; 4.x returned a tuple
+                            if isinstance(layer_outputs, tuple):
+                                new_seq = layer_outputs[0]
+                            else:
+                                new_seq = layer_outputs
+                                layer_outputs = (new_seq,)  # normalise for attentions/cache access below
 
                             if output_attentions:
                                 all_self_attns[i].append(layer_outputs[1])
@@ -578,7 +605,8 @@ class AirLLMBaseModel(GenerationMixin):
                                 kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
 
 
-                                new_seq = layer(seq, **kwargs)[0]
+                                _out = layer(seq, **kwargs)
+                                new_seq = _out[0] if isinstance(_out, tuple) else _out
                             else:
 
                                 kwargs = {'use_cache': True,
