@@ -23,6 +23,7 @@ import torch.nn as nn
 from safetensors.torch import load_file, save_file
 
 from .persist import ModelPersister
+from .device_utils import empty_cache, supports_bitsandbytes
 
 
 try:
@@ -72,17 +73,25 @@ class NotEnoughSpaceException(Exception):
     pass
 
 # Function to clean RAM & vRAM
-def clean_memory():
+def clean_memory(device: str = "cuda"):
     gc.collect()
     try:
         ctypes.CDLL("libc.so.6").malloc_trim(0)
-    except Exception as ex:
-        # maybe platform
+    except Exception:
+        # not available on Windows / macOS
         pass
-    torch.cuda.empty_cache()
+    empty_cache(device)
 
 
-def uncompress_layer_state_dict(layer_state_dict):
+def uncompress_layer_state_dict(layer_state_dict, device: str = "cuda"):
+    """Decompress a quantized layer state dict back to float16.
+
+    ``device`` is the *target* compute device.  bitsandbytes requires CUDA
+    for dequantization, so we always dequantize on CUDA and then move the
+    result to the requested device.  This means compression can only be used
+    when at least one CUDA device is present (even if the inference device is
+    DirectML/MPS/CPU).
+    """
     uncompressed_layer_state_dict = None
     if any(['4bit' in k for k in layer_state_dict.keys()]):
         uncompressed_layer_state_dict = {}
@@ -90,38 +99,32 @@ def uncompress_layer_state_dict(layer_state_dict):
             if '4bit' not in k:
                 quant_state_dict = {kk[len(k):]: kv for kk, kv in layer_state_dict.items() if kk.startswith(k) and k != kk}
                 quant_state = bnb.functional.QuantState.from_dict(qs_dict=quant_state_dict, device="cuda")
-
                 dqv = bnb.functional.dequantize_nf4(v.cuda(), quant_state)
-                uncompressed_layer_state_dict[k] = dqv
+                uncompressed_layer_state_dict[k] = dqv.to(device)
         del layer_state_dict
     elif any(['8bit' in k for k in layer_state_dict.keys()]):
         uncompressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
             if '8bit' not in k:
-
                 absmax = layer_state_dict[k + ".8bit.absmax"]
                 code = layer_state_dict[k + ".8bit.code"]
-
                 dqv = bnb.functional.dequantize_blockwise(v.cuda(),
                                                           bnb.functional.QuantState(absmax=absmax.cuda(),
                                                                                     code=code.cuda(),
                                                                                     blocksize=2048,
                                                                                     dtype=torch.float16))
-                uncompressed_layer_state_dict[k] = dqv
+                uncompressed_layer_state_dict[k] = dqv.to(device)
         del layer_state_dict
 
     return layer_state_dict if uncompressed_layer_state_dict is None else uncompressed_layer_state_dict
 
-def load_layer(local_path, layer_name, profiling=False):
-    #layer_state_dict = load_file(Path(local_path) / (layer_name + ".safetensors"), device="cpu")
+def load_layer(local_path, layer_name, profiling=False, device: str = "cuda"):
     layer_state_dict = ModelPersister.get_model_persister().load_model(layer_name, local_path)
 
     if profiling:
         t = time.process_time()
 
-    to_return = uncompress_layer_state_dict(layer_state_dict)
-
-    #clean_memory()
+    to_return = uncompress_layer_state_dict(layer_state_dict, device=device)
 
     if profiling:
         elapsed_time = time.process_time() - t
@@ -155,21 +158,27 @@ def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None
                                       )
 
 def compress_layer_state_dict(layer_state_dict, compression=None):
+    """Quantize layer weights using bitsandbytes (CUDA-only).
+
+    Compression always happens on CUDA regardless of the inference device
+    because bitsandbytes only supports NVIDIA GPUs.  The compressed tensors
+    are stored on CPU / disk and later dequantized at load time.
+    """
     compressed_layer_state_dict = None
     if compression == '4bit':
         compressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
             v_quant, quant_state = bnb.functional.quantize_nf4(v.cuda(), blocksize=64)
-            compressed_layer_state_dict[k] = v_quant
+            compressed_layer_state_dict[k] = v_quant.cpu()
             for quant_state_k, quant_state_v in save_quant_state_to_dict(quant_state).items():
-                compressed_layer_state_dict[k + ".4bit." + quant_state_k] = quant_state_v
+                compressed_layer_state_dict[k + ".4bit." + quant_state_k] = quant_state_v.cpu() if isinstance(quant_state_v, torch.Tensor) else quant_state_v
     elif compression == '8bit':
         compressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
             v_quant, quant_state = bnb.functional.quantize_blockwise(v.cuda(), blocksize=2048)
-            absmax = quant_state.absmax.clone().contiguous()
-            code = quant_state.code.clone().contiguous()
-            compressed_layer_state_dict[k] = v_quant
+            absmax = quant_state.absmax.clone().contiguous().cpu()
+            code = quant_state.code.clone().contiguous().cpu()
+            compressed_layer_state_dict[k] = v_quant.cpu()
             compressed_layer_state_dict[k + ".8bit.absmax"] = absmax
             compressed_layer_state_dict[k + ".8bit.code"] = code
 
