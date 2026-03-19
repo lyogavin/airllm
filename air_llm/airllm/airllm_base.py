@@ -15,10 +15,17 @@ from transformers.quantizers import AutoHfQuantizer, HfQuantizer
 
 from .profiler import LayeredProfiler
 
-from optimum.bettertransformer import BetterTransformer
+try:
+    from optimum.bettertransformer import BetterTransformer
+    bettertransformer_available = True
+except (ImportError, ModuleNotFoundError):
+    bettertransformer_available = False
 
 from .utils import clean_memory, load_layer, \
     find_or_create_local_splitted_path
+from .device_utils import (is_cuda_device, is_directml_available,
+                            can_pin_memory, supports_bitsandbytes,
+                            get_device_type)
 
 try:
     import bitsandbytes as bnb
@@ -84,7 +91,7 @@ class AirLLMBaseModel(GenerationMixin):
 
 
         self.profiling_mode = profiling_mode
-        self.profiler = LayeredProfiler()
+        self.profiler = LayeredProfiler(device=device)
 
         self.total_disk_loading_time = None
         self.total_gpu_loading_time = None
@@ -95,6 +102,12 @@ class AirLLMBaseModel(GenerationMixin):
         if compression is not None:
             if not bitsandbytes_installed:
                 raise ImportError('WARNING: bitsandbytes not found. Compression needs bitsandbytes. To use compression, please install bitsandbytes: `pip install bitsandbytes`')
+            if not supports_bitsandbytes(device):
+                raise ValueError(
+                    f"Compression ('4bit'/'8bit') requires a CUDA (NVIDIA) device but got device='{device}'. "
+                    f"Integrated GPU / DirectML / MPS devices do not support bitsandbytes. "
+                    f"Run without compression=... on this device."
+                )
 
 
         self.compression = compression
@@ -153,8 +166,10 @@ class AirLLMBaseModel(GenerationMixin):
             self.prefetching = False
             print(f"not support prefetching for compression for now. loading with no prepetching mode.")
 
-        # this operation should run only if gpu is available
-        if prefetching and device.startswith("cuda"):
+        # CUDA streams are only available on NVIDIA GPUs.
+        # For DirectML / MPS / CPU we still prefetch using ThreadPoolExecutor
+        # but without a CUDA stream (stream = None).
+        if prefetching and is_cuda_device(device):
             self.stream = torch.cuda.Stream()
         else:
             self.stream = None
@@ -184,14 +199,14 @@ class AirLLMBaseModel(GenerationMixin):
         # Load meta model (no memory used)
         self.model = None
 
-        if self.get_use_better_transformer():
+        if self.get_use_better_transformer() and bettertransformer_available:
             try:
                 with init_empty_weights():
                     self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
                     self.model = BetterTransformer.transform(self.model)  # enable flash attention
             except ValueError as ve:
                 del self.model
-                clean_memory()
+                clean_memory(self.running_device)
                 self.model = None
 
             if self.model is None:
@@ -207,7 +222,7 @@ class AirLLMBaseModel(GenerationMixin):
 
                 except TypeError as ve:
                     del self.model
-                    clean_memory()
+                    clean_memory(self.running_device)
                     self.model = None
 
         # fallback to original way
@@ -270,7 +285,7 @@ class AirLLMBaseModel(GenerationMixin):
 
         t = time.time()
 
-        load_layer_output = load_layer(self.checkpoint_path, layer_name, self.profiling_mode)
+        load_layer_output = load_layer(self.checkpoint_path, layer_name, self.profiling_mode, device=self.running_device)
         elapsed_time = time.time() - t
 
         if self.profiling_mode:
@@ -283,15 +298,12 @@ class AirLLMBaseModel(GenerationMixin):
         else:
             state_dict = load_layer_output
 
-        # pin memory:
+        # pin memory (only beneficial when copying to a CUDA device):
         if self.prefetching:
             t = time.time()
-            if torch.cuda.is_available():  # Check if CUDA is available
+            if can_pin_memory(self.running_device):
                 for k in state_dict.keys():
-                    state_dict[k].pin_memory()
-            else:
-                # For CPU, no action is needed, but you could optionally add a log or message
-                print("Prefetching is enabled, but no pin_memory operation is needed for CPU.")
+                    state_dict[k] = state_dict[k].pin_memory()
 
             elapsed_time = time.time() - t
             if self.profiling_mode:
@@ -374,6 +386,9 @@ class AirLLMBaseModel(GenerationMixin):
         return seq.shape[1]
 
     def get_pos_emb_args(self, len_p, len_s):
+        if getattr(self, '_cached_position_embeddings', None) is not None:
+            cos, sin = self._cached_position_embeddings
+            return {'position_embeddings': (cos[:, len_p:len_p + len_s], sin[:, len_p:len_p + len_s])}
         return {}
 
     def get_past_key_value_args(self, k_cache, v_cache):
@@ -419,7 +434,7 @@ class AirLLMBaseModel(GenerationMixin):
 
         # Reboot the model to make sure buffers are loaded and memory is clean
         del self.model
-        clean_memory()
+        clean_memory(self.running_device)
         self.init_model()
 
         batch = [input_ids_unit.to(self.running_device).unsqueeze(0) for input_ids_unit in input_ids]
@@ -431,6 +446,25 @@ class AirLLMBaseModel(GenerationMixin):
         attention_mask = attention_mask.to(self.running_device)
         position_ids = torch.arange(self.max_seq_len, dtype=torch.long, device=self.running_device)[None, :]
 
+        # Pre-compute rotary position embeddings for transformers 5.x models.
+        # In transformers >= 5.x, decoder layers no longer compute cos/sin internally;
+        # they must be passed explicitly as position_embeddings=(cos, sin).
+        self._cached_position_embeddings = None
+        _rotary_emb_mod = getattr(getattr(self.model, 'model', None), 'rotary_emb', None)
+        if _rotary_emb_mod is not None:
+            try:
+                # Re-instantiate on CPU so we can compute without meta weights
+                _re = type(_rotary_emb_mod)(self.config)
+                _cpu_pos_ids = position_ids.cpu()
+                _dummy = torch.zeros(1, dtype=torch.float32)  # dtype determines output dtype
+                _cos, _sin = _re(_dummy, _cpu_pos_ids)
+                self._cached_position_embeddings = (
+                    _cos.to(device=self.running_device, dtype=self.running_dtype),
+                    _sin.to(device=self.running_device, dtype=self.running_dtype),
+                )
+            except Exception:
+                pass
+
         kv_cache_list = [] if use_cache else None
         if use_cache:
             for x in self.layers:
@@ -438,7 +472,7 @@ class AirLLMBaseModel(GenerationMixin):
         all_hidden_states = [] * len(self.layers) if output_hidden_states else None
         all_self_attns = [] * len(self.layers) if output_attentions else None
 
-        with torch.inference_mode(), ThreadPoolExecutor() as executor:
+        with torch.no_grad(), ThreadPoolExecutor() as executor:
 
             # Load first layer
             if self.prefetching:
@@ -535,7 +569,12 @@ class AirLLMBaseModel(GenerationMixin):
                             layer_outputs = layer(seq,
                                                   **kwargs
                                                   )
-                            new_seq = layer_outputs[0]
+                            # transformers 5.x decoder layers return a bare tensor; 4.x returned a tuple
+                            if isinstance(layer_outputs, tuple):
+                                new_seq = layer_outputs[0]
+                            else:
+                                new_seq = layer_outputs
+                                layer_outputs = (new_seq,)  # normalise for attentions/cache access below
 
                             if output_attentions:
                                 all_self_attns[i].append(layer_outputs[1])
@@ -566,7 +605,8 @@ class AirLLMBaseModel(GenerationMixin):
                                 kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
 
 
-                                new_seq = layer(seq, **kwargs)[0]
+                                _out = layer(seq, **kwargs)
+                                new_seq = _out[0] if isinstance(_out, tuple) else _out
                             else:
 
                                 kwargs = {'use_cache': True,
@@ -597,7 +637,7 @@ class AirLLMBaseModel(GenerationMixin):
                     layer.to("meta")
 
                 layer.to("meta")
-                clean_memory()  # proposed by CPMP
+                clean_memory(self.running_device)  # proposed by CPMP
 
         logits = torch.cat(batch, 0)
         if use_cache:

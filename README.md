@@ -1,9 +1,10 @@
 ![airllm_logo](https://github.com/lyogavin/airllm/blob/main/assets/airllm_logo_sm.png?v=3&raw=true)
 
-[**Quickstart**](#quickstart) | 
-[**Configurations**](#configurations) | 
-[**MacOS**](#macos) | 
-[**Example notebooks**](#example-python-notebook) | 
+[**Quickstart**](#quickstart) |
+[**Configurations**](#configurations) |
+[**MacOS**](#macos) |
+[**Windows iGPU**](#windows-integrated-gpu-intelamd) |
+[**Example notebooks**](#example-python-notebook) |
 [**FAQ**](#faq)
 
 **AirLLM** optimizes inference memory usage, allowing 70B large language models to run inference on a single 4GB GPU card without quantization, distillation and pruning. And you can run **405B Llama3.1** on **8GB vram** now.
@@ -29,6 +30,8 @@
 * [Best AI Facial Expression Editor](https://crazyfaceai.com)
 
 ## Updates
+[2025/03/19] v2.12.0: Add **Windows Integrated GPU** support (Intel/AMD iGPU via DirectML). Run models on Intel Iris Xe and AMD Radeon integrated graphics without an NVIDIA GPU.
+
 [2024/08/20] v2.11.0: Support Qwen2.5
 
 [2024/08/18] v2.10.1 Support CPU inference. Support non sharded models. Thanks @NavodPeiris for the great work! 
@@ -63,6 +66,7 @@
 * [Model Compression](#model-compression---3x-inference-speed-up)
 * [Configurations](#configurations)
 * [Run on MacOS](#macos)
+* [Windows Integrated GPU (Intel/AMD)](#windows-integrated-gpu-intelamd)
 * [Example notebooks](#example-python-notebook)
 * [Supported Models](#supported-models)
 * [Acknowledgement](#acknowledgement)
@@ -167,6 +171,58 @@ Just install airllm and run the code the same as on linux. See more in [Quick St
 
 Example [python notebook] (https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
 
+
+## Windows Integrated GPU (Intel/AMD)
+
+AirLLM supports Intel and AMD **integrated GPUs** on Windows via [torch-directml](https://pypi.org/project/torch-directml/). This enables running large language models on laptops and desktops with no discrete NVIDIA GPU.
+
+**Supported hardware:**
+* Intel UHD Graphics, Iris Xe, Arc (integrated)
+* AMD Radeon integrated graphics
+
+### 1. Install
+
+```bash
+pip install torch-directml
+pip install airllm[directml]
+```
+
+### 2. Inference
+
+Pass `device="privateuseone:0"` to target the integrated GPU (index `0` is usually the iGPU on laptops):
+
+```python
+from airllm import AutoModel
+
+MAX_LENGTH = 128
+model = AutoModel.from_pretrained(
+    "garage-bAInd/Platypus2-70B-instruct",
+    device="privateuseone:0",   # Intel / AMD iGPU via DirectML
+)
+
+input_text = ['What is the capital of United States?']
+
+input_tokens = model.tokenizer(input_text,
+    return_tensors="pt",
+    return_attention_mask=False,
+    truncation=True,
+    max_length=MAX_LENGTH,
+    padding=False)
+
+generation_output = model.generate(
+    input_tokens['input_ids'].to("privateuseone:0"),
+    max_new_tokens=20,
+    use_cache=True,
+    return_dict_in_generate=True)
+
+print(model.tokenizer.decode(generation_output.sequences[0]))
+```
+
+### Notes
+
+* **Compression not supported on iGPU** — `bitsandbytes` (used for `4bit`/`8bit` compression) requires an NVIDIA GPU. Do not pass `compression=` when using DirectML. AirLLM will raise a clear error if you try.
+* Prefetching (background disk loading) still works on DirectML via `ThreadPoolExecutor`.
+* Memory info (`profiling_mode=True`) reports `n/a` for iGPU — DirectML does not expose a free-memory API.
 
 ## Example Python Notebook
 
