@@ -1,0 +1,74 @@
+{
+  "$schema": "https://fundingjson.org/schema/v1.1.0.json",
+  "version": "v1.1.0",
+  "entity": {
+    "type": "individual",
+    "role": "owner",
+    "name": "Gavin Li",
+    "email": "lyogavin@gmail.com",
+    "description": "Creator and maintainer of AirLLM, an open source library enabling 70B LLM inference on a single 4GB GPU.",
+    "webpageUrl": {
+      "url": "https://github.com/lyogavin"
+    }
+  },
+  "projects": [
+    {
+      "guid": "airllm",
+      "name": "AirLLM",
+      "description": "AirLLM enables 70B large language model inference on a single 4GB GPU, making large model inference accessible without expensive hardware.",
+      "webpageUrl": {
+        "url": "https://github.com/lyogavin/airllm"
+      },
+      "repositoryUrl": {
+        "url": "https://github.com/lyogavin/airllm"
+      },
+      "licenses": [
+        "spdx:Apache-2.0"
+      ],
+      "tags": [
+        "llm",
+        "machine-learning",
+        "generative-ai",
+        "inference",
+        "gpu",
+        "open-source"
+      ]
+    }
+  ],
+  "funding": {
+    "channels": [
+      {
+        "guid": "github-sponsors",
+        "type": "payment-provider",
+        "address": "https://github.com/sponsors/lyogavin",
+        "description": "Fund via GitHub Sponsors"
+      }
+    ],
+    "plans": [
+      {
+        "guid": "any-amount",
+        "status": "active",
+        "name": "Support AirLLM",
+        "description": "Support the development and maintenance of AirLLM with any amount.",
+        "amount": 0,
+        "currency": "USD",
+        "frequency": "one-time",
+        "channels": [
+          "github-sponsors"
+        ]
+      },
+      {
+        "guid": "monthly-support",
+        "status": "active",
+        "name": "Monthly Support",
+        "description": "Ongoing monthly support for AirLLM development.",
+        "amount": 0,
+        "currency": "USD",
+        "frequency": "monthly",
+        "channels": [
+          "github-sponsors"
+        ]
+      }
+    ]
+  }
+}
