@@ -1,0 +1,2742 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AirLLM UI</title>
+  <link rel="icon" href="/favicon?v=2">
+  <link rel="shortcut icon" href="/favicon.ico?v=2">
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --bg-soft: #eef2ff;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --muted: #64748b;
+      --accent: #0f172a;
+      --accent-soft: #e2e8f0;
+      --accent-text: #ffffff;
+      --shadow: 0 8px 28px rgba(15, 23, 42, 0.08);
+      --message-user: #dbeafe;
+      --message-user-border: #bfdbfe;
+      --message-assistant: #f8fafc;
+      --message-assistant-border: #e2e8f0;
+    }
+    [data-theme="dark"] {
+      --bg: #0b1220;
+      --bg-soft: #131c2f;
+      --panel: #111827;
+      --panel-soft: #0f172a;
+      --border: #1f2937;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #2563eb;
+      --accent-soft: #1e293b;
+      --accent-text: #f8fafc;
+      --shadow: 0 10px 30px rgba(2, 6, 23, 0.45);
+      --message-user: #1e3a8a;
+      --message-user-border: #1d4ed8;
+      --message-assistant: #111827;
+      --message-assistant-border: #1f2937;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background:
+        radial-gradient(circle at 15% 0%, var(--bg-soft), transparent 40%),
+        radial-gradient(circle at 90% 10%, var(--accent-soft), transparent 30%),
+        var(--bg);
+      color: var(--text);
+      transition: background 0.2s ease, color 0.2s ease;
+    }
+    .shell {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      min-height: 100vh;
+    }
+    .sidebar {
+      border-right: 1px solid var(--border);
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      backdrop-filter: blur(8px);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .brand {
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .sidebar-nav {
+      display: grid;
+      gap: 8px;
+    }
+    .tab-btn {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+    }
+    .tab-btn:hover {
+      transform: translateY(-1px);
+      border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+    }
+    .tab-btn.active {
+      background: var(--accent);
+      color: var(--accent-text);
+      border-color: var(--accent);
+    }
+    .tab-badge {
+      margin-left: 6px;
+      font-size: 10px;
+      border-radius: 999px;
+      background: #dc2626;
+      color: #ffffff;
+      padding: 1px 6px;
+      font-weight: 700;
+    }
+    .conversation-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel);
+      padding: 10px;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 8px;
+    }
+    .conversation-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .conversation-actions {
+      display: inline-flex;
+      gap: 6px;
+    }
+    .btn.xs {
+      font-size: 11px;
+      padding: 5px 8px;
+    }
+    .conversation-list {
+      display: grid;
+      gap: 6px;
+      overflow: auto;
+      max-height: calc(100vh - 260px);
+      padding-right: 2px;
+    }
+    .conversation-item-row {
+      position: relative;
+    }
+    .conversation-item {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 72px 8px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .conversation-rename-input {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      padding: 8px 72px 8px 10px;
+    }
+    .conversation-item-controls {
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: inline-flex;
+      gap: 4px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+      background: color-mix(in srgb, var(--panel) 85%, transparent);
+      border-radius: 8px;
+      padding: 2px;
+    }
+    .conversation-item-row:hover .conversation-item-controls,
+    .conversation-item-row:focus-within .conversation-item-controls,
+    .conversation-item-row.editing .conversation-item-controls {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .icon-btn-sm {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--muted);
+      border-radius: 6px;
+      min-width: 28px;
+      width: 28px;
+      height: 28px;
+      font-size: 12px;
+      line-height: 0;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+    .icon-btn-sm:hover {
+      border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+      color: var(--text);
+    }
+    .icon-btn-sm svg {
+      width: 16px;
+      height: 16px;
+      display: block;
+      flex-shrink: 0;
+    }
+    .icon-btn-sm.confirm {
+      background: #16a34a;
+      border-color: #16a34a;
+      color: #ffffff;
+    }
+    .icon-btn-sm.confirm:hover {
+      background: #15803d;
+      border-color: #15803d;
+      color: #ffffff;
+    }
+    .icon-btn-sm.delete {
+      background: #dc2626;
+      border-color: #dc2626;
+      color: #ffffff;
+    }
+    .icon-btn-sm.delete:hover {
+      background: #b91c1c;
+      border-color: #b91c1c;
+      color: #ffffff;
+    }
+    .conversation-item.active {
+      background: var(--accent);
+      color: var(--accent-text);
+      border-color: var(--accent);
+    }
+    .conversation-empty {
+      font-size: 12px;
+      color: var(--muted);
+      padding: 6px 2px;
+    }
+    .main {
+      display: grid;
+      grid-template-rows: 56px 1fr;
+      min-width: 0;
+    }
+    .topbar {
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in srgb, var(--panel) 94%, transparent);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      gap: 8px;
+    }
+    .topbar .title {
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .topbar-model {
+      max-width: 360px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .topbar-model.error {
+      color: #ef4444;
+      font-weight: 700;
+    }
+    .topbar-model.clickable {
+      cursor: pointer;
+      text-decoration: underline;
+      text-decoration-style: dotted;
+      text-underline-offset: 2px;
+    }
+    .icon-btn {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .content {
+      padding: 16px;
+      min-height: 0;
+    }
+    .panel {
+      display: none;
+      height: 100%;
+    }
+    .panel.active {
+      display: block;
+    }
+    .chat-layout {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      height: calc(100vh - 88px);
+      gap: 12px;
+    }
+    .chat-tools {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+    }
+    .chat-tools .icon-btn-sm {
+      min-width: 30px;
+      width: 30px;
+      height: 30px;
+    }
+    #messages {
+      background: color-mix(in srgb, var(--panel-soft) 65%, var(--panel));
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: auto;
+      padding: 14px;
+      box-shadow: var(--shadow);
+    }
+    .message {
+      padding: 11px 13px;
+      border-radius: 14px;
+      margin-bottom: 12px;
+      max-width: 90%;
+      white-space: pre-wrap;
+      line-height: 1.45;
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+    }
+    .message.user {
+      margin-left: auto;
+      background: var(--message-user);
+      border: 1px solid var(--message-user-border);
+    }
+    .message.assistant {
+      margin-right: auto;
+      background: var(--message-assistant);
+      border: 1px solid var(--message-assistant-border);
+    }
+    .composer {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+      box-shadow: var(--shadow);
+    }
+    textarea, input, select {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 10px;
+      font: inherit;
+      background: var(--panel);
+      color: var(--text);
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    textarea:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+    textarea:focus, input:focus, select:focus {
+      outline: none;
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+    }
+    textarea { resize: vertical; min-height: 78px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      margin-bottom: 12px;
+      box-shadow: var(--shadow);
+    }
+    .card h3 { margin: 0 0 8px; font-size: 15px; }
+    .label { font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 10px; display: block; }
+    .notifications-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .notifications-list {
+      display: grid;
+      gap: 8px;
+      max-height: calc(100vh - 220px);
+      overflow: auto;
+    }
+    .notification-item {
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      border-radius: 10px;
+      padding: 10px;
+    }
+    .notification-item.info {
+      border-left: 3px solid #3b82f6;
+    }
+    .notification-item.success {
+      border-left: 3px solid #16a34a;
+    }
+    .notification-item.warning {
+      border-left: 3px solid #d97706;
+    }
+    .notification-item.error {
+      border-left: 3px solid #dc2626;
+    }
+    .notification-title {
+      font-size: 13px;
+      color: var(--text);
+      white-space: pre-wrap;
+    }
+    .notification-meta {
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .btn {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font: inherit;
+      transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    }
+    .btn:hover {
+      transform: translateY(-1px);
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+    }
+    .btn.primary {
+      background: var(--accent);
+      color: var(--accent-text);
+      border-color: var(--accent);
+    }
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .inline { display: inline-flex; align-items: center; gap: 8px; }
+    .small { font-size: 12px; color: var(--muted); }
+    .chat-composer-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    #settingsStatus {
+      white-space: pre-wrap;
+      background: var(--panel-soft);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      display: block;
+      width: 100%;
+      max-height: 220px;
+      overflow: auto;
+    }
+    .settings-tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+    .settings-tab-btn {
+      appearance: none;
+      -webkit-appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--muted);
+      -webkit-text-fill-color: currentColor;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .settings-tab-btn:hover {
+      border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+      color: var(--text);
+    }
+    .settings-tab-btn.active {
+      background: var(--accent);
+      color: var(--accent-text);
+      border-color: var(--accent);
+    }
+    [data-theme="dark"] .settings-tab-btn {
+      background: var(--panel) !important;
+      color: var(--muted) !important;
+      border-color: var(--border) !important;
+    }
+    [data-theme="dark"] .settings-tab-btn.active {
+      background: var(--accent) !important;
+      color: var(--accent-text) !important;
+      border-color: var(--accent) !important;
+    }
+    [data-theme="dark"] #settingsStatus {
+      background: var(--panel-soft) !important;
+      color: var(--text) !important;
+      border-color: var(--border) !important;
+    }
+    .settings-subpanel { display: none; }
+    .settings-subpanel.active { display: block; }
+    .download-badge {
+      font-size: 10px;
+      border-radius: 999px;
+      background: #f59e0b;
+      color: #111827;
+      padding: 2px 7px;
+      font-weight: 700;
+    }
+    .badge-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .status-badge.airllm {
+      background: #14532d;
+      border-color: #166534;
+      color: #dcfce7;
+    }
+    .status-badge.standard {
+      background: #1e3a8a;
+      border-color: #1d4ed8;
+      color: #dbeafe;
+    }
+    .status-badge.error {
+      background: #7f1d1d;
+      border-color: #b91c1c;
+      color: #fee2e2;
+    }
+    .hidden { display: none !important; }
+    .progress-wrap {
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--panel);
+    }
+    .progress-bar {
+      height: 10px;
+      width: 0%;
+      background: #0f766e;
+      transition: width 0.2s ease;
+    }
+    .progress-bar.model-load {
+      background: #2563eb;
+    }
+    .log-box {
+      margin-top: 8px;
+      max-height: 180px;
+      overflow: auto;
+      white-space: pre-wrap;
+      background: var(--panel-soft);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 30;
+      padding: 16px;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal-card {
+      width: min(900px, 96vw);
+      max-height: 90vh;
+      overflow: auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      box-shadow: var(--shadow);
+    }
+    .modal-title {
+      margin: 0 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    @media (max-width: 980px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { border-right: none; border-bottom: 1px solid var(--border); }
+      .chat-layout { height: auto; min-height: 70vh; }
+      .row, .row3 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">AirLLM UI</div>
+      <div class="sidebar-nav">
+        <button id="tabChatBtn" class="tab-btn active" onclick="switchTab('chat')">Chat</button>
+        <button id="tabNotificationsBtn" class="tab-btn" onclick="switchTab('notifications')">Notifications <span id="notificationsBadge" class="tab-badge hidden">0</span></button>
+        <button id="tabSettingsBtn" class="tab-btn" onclick="switchTab('settings')">Settings</button>
+      </div>
+      <div id="conversationSection" class="conversation-card">
+        <div class="conversation-header">
+          <span>Conversations</span>
+          <div class="conversation-actions">
+            <button class="btn xs" onclick="newConversation()">New</button>
+          </div>
+        </div>
+        <div class="small">Context is kept per conversation.</div>
+        <div id="conversationList" class="conversation-list">
+          <div class="conversation-empty">No conversations yet.</div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div class="title" id="topbarTitle">Chat</div>
+        <div class="topbar-actions">
+          <div class="small topbar-model" id="topbarModel">Model: -</div>
+          <button id="themeToggle" class="icon-btn" onclick="toggleTheme()">Dark</button>
+        </div>
+      </div>
+
+      <div class="content">
+        <section id="chatPanel" class="panel active">
+          <div class="chat-layout">
+            <div class="chat-tools">
+              <button id="chatClearBtn" class="icon-btn-sm delete" onclick="clearActiveConversation()" title="Clear current chat" aria-label="Clear current chat">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M10 2h4a2 2 0 0 1 2 2v1h4a1 1 0 1 1 0 2h-1v12a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V7H4a1 1 0 1 1 0-2h4V4a2 2 0 0 1 2-2zm4 3V4h-4v1h4zm-7 2v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7H7zm3 3a1 1 0 0 1 1 1v6a1 1 0 1 1-2 0v-6a1 1 0 0 1 1-1zm4 0a1 1 0 0 1 1 1v6a1 1 0 1 1-2 0v-6a1 1 0 0 1 1-1z"/></svg>
+              </button>
+            </div>
+            <div id="messages">
+              <div class="message assistant">AirLLM is ready. Open Settings to choose model source, then send a prompt.</div>
+            </div>
+            <div class="composer">
+              <div id="activeConversationLabel" class="small">Conversation: -</div>
+              <textarea id="prompt" placeholder="Type a message. Enter to send, Shift+Enter for a new line."></textarea>
+              <div class="chat-composer-actions">
+                <div id="generationStatus" class="small"></div>
+                <button id="chatStopBtn" class="btn hidden" onclick="cancelGeneration()">Stop</button>
+                <button id="chatSendBtn" class="btn primary" onclick="sendPrompt()">Send</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="notificationsPanel" class="panel">
+          <div class="card">
+            <div class="notifications-head">
+              <h3>Notifications</h3>
+              <button class="btn xs" onclick="clearNotifications()">Clear</button>
+            </div>
+            <div id="notificationsList" class="notifications-list">
+              <div class="conversation-empty">No notifications yet.</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="settingsPanel" class="panel">
+          <div class="settings-tabs">
+            <button id="settingsTabConfigBtn" class="settings-tab-btn active" onclick="switchSettingsTab('config')">Model Config</button>
+            <button id="settingsTabPromptBtn" class="settings-tab-btn" onclick="switchSettingsTab('prompt')">Prompt Settings</button>
+            <button id="settingsTabDownloadBtn" class="settings-tab-btn" onclick="switchSettingsTab('download')">Hugging Face Download <span id="settingsDownloadBadge" class="download-badge hidden">Downloading</span></button>
+          </div>
+
+          <div id="settingsConfigPanel" class="settings-subpanel active">
+            <div class="card">
+              <h3>Model Configuration</h3>
+              <span class="label">Model ID (HF repo id)</span>
+              <input id="modelId" value="__MODEL_ID_VALUE__" placeholder="TinyLlama/TinyLlama-1.1B-Chat-v1.0" />
+              <span class="label">External Model Path (AIRLLM_MODEL_PATH)</span>
+              <input id="modelPath" value="__MODEL_PATH_VALUE__" placeholder="Path to HF Transformers model directory" />
+              <span class="label">External Base Directory (AIRLLM_MODEL_BASE_DIR)</span>
+              <input id="modelBaseDir" value="__MODEL_BASE_DIR_VALUE__" placeholder="AIRLLM_MODEL_BASE_DIR from .env" />
+              <div class="row3">
+                <div>
+                  <span class="label">Discovered Models</span>
+                  <select id="modelSelect" onchange="applySelectedModel()">
+                    <option value="">(scan base directory)</option>
+                  </select>
+                  <div id="modelScanInfo" class="small" style="margin-top:6px;">Scan to list discovered model folders and runtime mode.</div>
+                  <div class="badge-row">
+                    <span id="modelOptimizationBadge" class="status-badge standard">Runtime: Standard</span>
+                    <span id="modelOptimizationHint" class="small">Select a model to view optimization status.</span>
+                  </div>
+                </div>
+                <div>
+                  <span class="label">Actions</span>
+                  <button class="btn" onclick="refreshModels()">Scan Base Directory</button>
+                </div>
+                <div>
+                  <span class="label">Actions</span>
+                  <button class="btn" onclick="clearModelPath()">Clear Model Path</button>
+                </div>
+              </div>
+
+              <span class="label">Device</span>
+              <input id="device" value="__DEVICE_VALUE__" placeholder="cuda:0 or cpu" />
+              <div class="small">Recommended for this machine: <code>cuda:0</code>. Use <code>cpu</code> only if needed.</div>
+              <div class="small">Examples: <code>cuda:0</code>, <code>cpu</code>. Value must not include extra text.</div>
+              <div class="inline" style="margin-top:10px;">
+                <input id="persistEnv" type="checkbox" checked style="width:auto;" />
+                <span class="small">Persist selected values to project <code>.env</code></span>
+              </div>
+              <div style="display:flex; gap:8px; margin-top:12px;">
+                <button class="btn" onclick="saveSettings()">Save Settings</button>
+                <button id="loadModelBtn" class="btn primary" onclick="loadModel()">Load / Reload Model</button>
+                <button id="modelLoadStopBtn" class="btn hidden" onclick="stopModelLoad()">Stop Load</button>
+              </div>
+              <div id="modelLoadProgressWrap" class="hidden" style="margin-top:10px;">
+                <div id="modelLoadProgressMeta" class="small">Preparing model load...</div>
+                <div class="progress-wrap"><div id="modelLoadProgressBar" class="progress-bar model-load"></div></div>
+                <div id="modelLoadProgressText" class="small" style="margin-top:6px;">0%</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="settingsDownloadPanel" class="settings-subpanel">
+            <div class="card">
+              <h3>Hugging Face Download</h3>
+              <span class="label">Repo ID</span>
+              <input id="hfModelId" placeholder="meta-llama/Llama-2-7b-hf" />
+              <div class="row">
+                <div>
+                  <span class="label">Revision (optional)</span>
+                  <input id="hfRevision" placeholder="main" />
+                </div>
+                <div>
+                  <span class="label">Target Subdir (optional)</span>
+                  <input id="hfSubdir" placeholder="custom/my-model-dir" />
+                </div>
+              </div>
+              <span class="label">Allow Patterns (optional, comma separated)</span>
+              <input id="hfAllowPatterns" placeholder="config.json,*.safetensors,tokenizer*" />
+              <span class="label">Ignore Patterns (optional, comma separated)</span>
+              <input id="hfIgnorePatterns" placeholder="*.onnx,*.msgpack" />
+              <div class="inline" style="margin-top:10px;">
+                <input id="hfSetActive" type="checkbox" checked style="width:auto;" />
+                <span class="small">Set downloaded model as active AIRLLM_MODEL_PATH</span>
+              </div>
+              <div style="display:flex; gap:8px; margin-top:12px;">
+                <button class="btn" onclick="checkHFCompatibility(true)">Check Compatibility</button>
+                <button id="hfDownloadBtn" class="btn primary" onclick="downloadFromHF()">Download from Hugging Face</button>
+              </div>
+              <div id="hfCompatSummary" class="small" style="margin-top:8px;">Compatibility not checked yet.</div>
+              <div class="badge-row">
+                <span id="hfCompatRuntimeBadge" class="status-badge standard">Not checked</span>
+              </div>
+              <div id="hfCompatDetails" class="log-box">Run compatibility check to validate model type and architecture support before downloading.</div>
+              <div class="small" style="margin-top:8px;">Downloads are saved under the current base directory.</div>
+            </div>
+
+            <div class="card">
+              <h3>Download Progress</h3>
+              <div id="downloadJobMeta" class="small">No active downloads.</div>
+              <div class="progress-wrap"><div id="downloadProgressBar" class="progress-bar"></div></div>
+              <div id="downloadProgressText" class="small" style="margin-top:6px;">0%</div>
+              <div id="downloadLogBox" class="log-box">No logs yet.</div>
+            </div>
+          </div>
+
+          <div id="settingsPromptPanel" class="settings-subpanel">
+            <div class="card">
+              <h3>Prompt Settings</h3>
+              <span class="label">System Context (optional)</span>
+              <textarea id="systemContext" placeholder="Example: You are a concise assistant focused on code quality and practical recommendations."></textarea>
+              <div class="row">
+                <div>
+                  <span class="label">Max New Tokens</span>
+                  <input id="maxNewTokens" type="number" value="4" min="1" max="1024" />
+                </div>
+                <div>
+                  <span class="label">Do Sample</span>
+                  <select id="doSample">
+                    <option value="false">false</option>
+                    <option value="true">true</option>
+                  </select>
+                </div>
+              </div>
+              <div class="row">
+                <div>
+                  <span class="label">History Turns</span>
+                  <input id="historyTurns" type="number" value="6" min="0" max="40" />
+                </div>
+                <div></div>
+              </div>
+              <div style="display:flex; gap:8px; margin-top:12px;">
+                <button class="btn" onclick="savePromptSettings()">Save Prompt Settings</button>
+              </div>
+              <div class="small" style="margin-top:8px;">Context and prompt settings are stored in your browser.</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Settings Status</h3>
+            <div id="settingsStatus">No actions yet.</div>
+          </div>
+          <div class="card">
+            <h3>Runtime Status</h3>
+            <div id="runtimeMeta" class="log-box">Loading...</div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="downloadModal" class="modal-overlay">
+    <div class="modal-card">
+      <h3 class="modal-title">Model Not Found Locally</h3>
+      <div class="small">The selected model path does not exist on disk. Download it from Hugging Face now?</div>
+      <div id="downloadModalHint" class="small" style="margin-top:8px;"></div>
+
+      <span class="label">Repo ID</span>
+      <input id="modalHfModelId" placeholder="meta-llama/Llama-2-7b-hf" />
+      <div class="row">
+        <div>
+          <span class="label">Revision (optional)</span>
+          <input id="modalHfRevision" placeholder="main" />
+        </div>
+        <div>
+          <span class="label">Target Subdir (optional)</span>
+          <input id="modalHfSubdir" placeholder="custom/my-model-dir" />
+        </div>
+      </div>
+      <span class="label">Allow Patterns (optional, comma separated)</span>
+      <input id="modalHfAllowPatterns" placeholder="config.json,*.safetensors,tokenizer*" />
+      <span class="label">Ignore Patterns (optional, comma separated)</span>
+      <input id="modalHfIgnorePatterns" placeholder="*.onnx,*.msgpack" />
+      <div class="inline" style="margin-top:10px;">
+        <input id="modalHfSetActive" type="checkbox" checked style="width:auto;" />
+        <span class="small">Set downloaded model as active model path</span>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn" onclick="closeDownloadModal()">Cancel</button>
+        <button id="modalDownloadBtn" class="btn primary" onclick="downloadFromHFModal()">Download</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let lastStatus = null;
+    let currentTheme = "light";
+    let isGenerating = false;
+    let activeGenerateAbortController = null;
+    let generationStatusTimer = null;
+    let generationStartedAt = 0;
+    let generationExpectedSeconds = 0;
+    let activeDownloadJobId = null;
+    let downloadPollTimer = null;
+    let pendingLoadPayload = null;
+    let hasModelIssue = false;
+    let lastHFCompatibility = null;
+    let isModelLoading = false;
+    let activeModelLoadJobId = null;
+    let modelLoadProgress = 0;
+    const CONVERSATION_STORAGE_KEY = "airllm_conversations_v1";
+    const ACTIVE_CONVERSATION_STORAGE_KEY = "airllm_active_conversation_v1";
+    const PROMPT_SETTINGS_STORAGE_KEY = "airllm_prompt_settings_v2";
+    const LEGACY_PROMPT_SETTINGS_STORAGE_KEY = "airllm_prompt_settings_v1";
+    const NOTIFICATION_STORAGE_KEY = "airllm_notifications_v1";
+    let conversations = [];
+    let activeConversationId = null;
+    let editingConversationId = null;
+    let notifications = [];
+
+    function newId(prefix) {
+      return prefix + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+    }
+
+    function defaultConversationTitle() {
+      return "Chat " + (conversations.length + 1);
+    }
+
+    function createConversationObject(title = null) {
+      const now = Date.now();
+      return {
+        id: newId("conv"),
+        title: (title || defaultConversationTitle()).trim(),
+        messages: [],
+        created_at: now,
+        updated_at: now,
+      };
+    }
+
+    function getActiveConversation() {
+      return conversations.find((item) => item.id === activeConversationId) || null;
+    }
+
+    function saveConversationsState() {
+      try {
+        localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(conversations));
+        localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, activeConversationId || "");
+      } catch (err) {
+        console.warn("Unable to persist conversations:", err);
+      }
+    }
+
+    function saveNotificationsState() {
+      try {
+        localStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify(notifications));
+      } catch (err) {
+        console.warn("Unable to persist notifications:", err);
+      }
+    }
+
+    function loadConversationsState() {
+      let parsed = [];
+      try {
+        const raw = localStorage.getItem(CONVERSATION_STORAGE_KEY);
+        parsed = raw ? JSON.parse(raw) : [];
+      } catch (_) {
+        parsed = [];
+      }
+      if (!Array.isArray(parsed)) {
+        parsed = [];
+      }
+      conversations = parsed
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          id: item.id || newId("conv"),
+          title: (item.title || "Chat").trim() || "Chat",
+          messages: Array.isArray(item.messages)
+            ? item.messages
+                .filter((msg) => msg && typeof msg === "object" && (msg.role === "user" || msg.role === "assistant"))
+                .map((msg) => ({
+                  id: msg.id || newId("msg"),
+                  role: msg.role,
+                  text: String(msg.text || ""),
+                }))
+            : [],
+          created_at: Number(item.created_at || Date.now()),
+          updated_at: Number(item.updated_at || Date.now()),
+        }));
+      if (!conversations.length) {
+        const created = createConversationObject("Chat 1");
+        conversations = [created];
+        activeConversationId = created.id;
+        saveConversationsState();
+        return;
+      }
+      const storedActive = localStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+      activeConversationId = conversations.some((item) => item.id === storedActive) ? storedActive : conversations[0].id;
+      saveConversationsState();
+    }
+
+    function loadNotificationsState() {
+      let parsed = [];
+      try {
+        parsed = JSON.parse(localStorage.getItem(NOTIFICATION_STORAGE_KEY) || "[]");
+      } catch (_) {
+        parsed = [];
+      }
+      if (!Array.isArray(parsed)) {
+        parsed = [];
+      }
+      notifications = parsed
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          id: item.id || newId("note"),
+          level: ["info", "success", "warning", "error"].includes(item.level) ? item.level : "info",
+          text: String(item.text || ""),
+          created_at: Number(item.created_at || Date.now()),
+        }))
+        .slice(-200);
+      saveNotificationsState();
+    }
+
+    function updateTopbarTitle() {
+      const isChat = document.getElementById("chatPanel").classList.contains("active");
+      const isNotifications = document.getElementById("notificationsPanel").classList.contains("active");
+      if (isChat) {
+        const conv = getActiveConversation();
+        document.getElementById("topbarTitle").textContent = conv ? conv.title : "Chat";
+        document.getElementById("activeConversationLabel").textContent = "Conversation: " + (conv ? conv.title : "-");
+      } else if (isNotifications) {
+        document.getElementById("topbarTitle").textContent = "Notifications";
+      } else {
+        document.getElementById("topbarTitle").textContent = "Settings";
+      }
+    }
+
+    function renderConversationList() {
+      const list = document.getElementById("conversationList");
+      list.innerHTML = "";
+      if (!conversations.length) {
+        list.innerHTML = '<div class="conversation-empty">No conversations yet.</div>';
+        return;
+      }
+      for (const conv of conversations) {
+        const row = document.createElement("div");
+        const isEditing = editingConversationId === conv.id;
+        row.className = "conversation-item-row" + (isEditing ? " editing" : "");
+
+        if (isEditing) {
+          const input = document.createElement("input");
+          input.className = "conversation-rename-input";
+          input.type = "text";
+          input.value = conv.title || "Chat";
+          input.maxLength = 120;
+          input.setAttribute("data-conversation-id", conv.id);
+          input.onclick = (e) => e.stopPropagation();
+          input.onkeydown = (e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              confirmInlineRename(conv.id, input.value);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancelInlineRename();
+            }
+          };
+          row.appendChild(input);
+        } else {
+          const btn = document.createElement("button");
+          btn.className = "conversation-item" + (conv.id === activeConversationId ? " active" : "");
+          btn.textContent = conv.title || "Chat";
+          btn.title = conv.title || "Chat";
+          btn.onclick = () => selectConversation(conv.id);
+          row.appendChild(btn);
+        }
+
+        const controls = document.createElement("div");
+        controls.className = "conversation-item-controls";
+
+        if (isEditing) {
+          const confirmBtn = document.createElement("button");
+          confirmBtn.className = "icon-btn-sm confirm";
+          confirmBtn.title = "Confirm rename";
+          confirmBtn.innerHTML = "&#10003;";
+          confirmBtn.onclick = (e) => {
+            e.stopPropagation();
+            const input = row.querySelector(".conversation-rename-input");
+            confirmInlineRename(conv.id, input ? input.value : conv.title);
+          };
+
+          const cancelBtn = document.createElement("button");
+          cancelBtn.className = "icon-btn-sm";
+          cancelBtn.title = "Cancel rename";
+          cancelBtn.innerHTML = "&#10005;";
+          cancelBtn.onclick = (e) => {
+            e.stopPropagation();
+            cancelInlineRename();
+          };
+
+          controls.appendChild(confirmBtn);
+          controls.appendChild(cancelBtn);
+        } else {
+          const renameBtn = document.createElement("button");
+          renameBtn.className = "icon-btn-sm";
+          renameBtn.title = "Rename conversation";
+          renameBtn.innerHTML = "&#9998;";
+          renameBtn.onclick = (e) => {
+            e.stopPropagation();
+            startInlineRename(conv.id);
+          };
+
+          const deleteBtn = document.createElement("button");
+          deleteBtn.className = "icon-btn-sm delete";
+          deleteBtn.title = "Delete conversation";
+          deleteBtn.innerHTML =
+            '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M10 2h4a2 2 0 0 1 2 2v1h4a1 1 0 1 1 0 2h-1v12a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V7H4a1 1 0 1 1 0-2h4V4a2 2 0 0 1 2-2zm4 3V4h-4v1h4zm-7 2v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7H7zm3 3a1 1 0 0 1 1 1v6a1 1 0 1 1-2 0v-6a1 1 0 0 1 1-1zm4 0a1 1 0 0 1 1 1v6a1 1 0 1 1-2 0v-6a1 1 0 0 1 1-1z"/></svg>';
+          deleteBtn.onclick = (e) => {
+            e.stopPropagation();
+            deleteConversation(conv.id);
+          };
+
+          controls.appendChild(renameBtn);
+          controls.appendChild(deleteBtn);
+        }
+
+        row.appendChild(controls);
+        list.appendChild(row);
+
+        if (isEditing) {
+          setTimeout(() => {
+            const input = row.querySelector(".conversation-rename-input");
+            if (!input) return;
+            input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
+          }, 0);
+        }
+      }
+    }
+
+    function renderMessages() {
+      const box = document.getElementById("messages");
+      const conv = getActiveConversation();
+      box.innerHTML = "";
+      if (!conv || !conv.messages.length) {
+        const empty = document.createElement("div");
+        empty.className = "message assistant";
+        empty.textContent = "AirLLM is ready. Open Settings to choose model source, then send a prompt.";
+        box.appendChild(empty);
+        box.scrollTop = box.scrollHeight;
+        return;
+      }
+      for (const msg of conv.messages) {
+        const el = document.createElement("div");
+        el.className = "message " + msg.role;
+        el.textContent = msg.text;
+        box.appendChild(el);
+      }
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function renderNotifications() {
+      const list = document.getElementById("notificationsList");
+      const badge = document.getElementById("notificationsBadge");
+      if (!list || !badge) return;
+
+      list.innerHTML = "";
+      if (!notifications.length) {
+        list.innerHTML = '<div class="conversation-empty">No notifications yet.</div>';
+        badge.classList.add("hidden");
+        return;
+      }
+
+      const recent = notifications.slice().reverse();
+      for (const note of recent) {
+        const item = document.createElement("div");
+        item.className = "notification-item " + (note.level || "info");
+
+        const title = document.createElement("div");
+        title.className = "notification-title";
+        title.textContent = note.text || "";
+
+        const meta = document.createElement("div");
+        meta.className = "notification-meta";
+        const time = new Date(note.created_at || Date.now()).toLocaleString();
+        meta.textContent = (note.level || "info").toUpperCase() + " • " + time;
+
+        item.appendChild(title);
+        item.appendChild(meta);
+        list.appendChild(item);
+      }
+
+      badge.textContent = String(notifications.length);
+      badge.classList.toggle("hidden", notifications.length === 0);
+    }
+
+    function pushNotification(text, level = "info") {
+      const safeLevel = ["info", "success", "warning", "error"].includes(level) ? level : "info";
+      notifications.push({
+        id: newId("note"),
+        level: safeLevel,
+        text: String(text || ""),
+        created_at: Date.now(),
+      });
+      if (notifications.length > 200) {
+        notifications = notifications.slice(-200);
+      }
+      saveNotificationsState();
+      renderNotifications();
+    }
+
+    function clearNotifications() {
+      if (!notifications.length) return;
+      notifications = [];
+      saveNotificationsState();
+      renderNotifications();
+    }
+
+    function selectConversation(conversationId) {
+      if (!conversations.some((item) => item.id === conversationId)) return;
+      editingConversationId = null;
+      activeConversationId = conversationId;
+      saveConversationsState();
+      renderConversationList();
+      renderMessages();
+      switchTab("chat");
+      updateTopbarTitle();
+    }
+
+    function newConversation() {
+      const conv = createConversationObject(defaultConversationTitle());
+      conversations.unshift(conv);
+      activeConversationId = conv.id;
+      saveConversationsState();
+      renderConversationList();
+      renderMessages();
+      switchTab("chat");
+      updateTopbarTitle();
+    }
+
+    function clearActiveConversation() {
+      const conv = getActiveConversation();
+      if (!conv) return;
+      if (!Array.isArray(conv.messages) || conv.messages.length === 0) {
+        return;
+      }
+      conv.messages = [];
+      conv.updated_at = Date.now();
+      saveConversationsState();
+      renderMessages();
+      renderConversationList();
+      switchTab("chat");
+      updateTopbarTitle();
+    }
+
+    function startInlineRename(conversationId) {
+      if (!conversations.some((item) => item.id === conversationId)) return;
+      editingConversationId = conversationId;
+      renderConversationList();
+    }
+
+    function cancelInlineRename() {
+      editingConversationId = null;
+      renderConversationList();
+    }
+
+    function confirmInlineRename(conversationId, nextTitleRaw) {
+      const conv = conversations.find((item) => item.id === conversationId);
+      if (!conv) return;
+      const nextTitle = String(nextTitleRaw || "").trim();
+      if (!nextTitle) {
+        cancelInlineRename();
+        return;
+      }
+      conv.title = nextTitle;
+      conv.updated_at = Date.now();
+      editingConversationId = null;
+      saveConversationsState();
+      renderConversationList();
+      if (conversationId === activeConversationId) {
+        updateTopbarTitle();
+      }
+    }
+
+    function deleteConversation(conversationId) {
+      const conv = conversations.find((item) => item.id === conversationId);
+      if (!conv) return;
+      editingConversationId = null;
+      conversations = conversations.filter((item) => item.id !== conv.id);
+      if (!conversations.length) {
+        const fallback = createConversationObject("Chat 1");
+        conversations.push(fallback);
+        activeConversationId = fallback.id;
+      } else {
+        activeConversationId = conversations[0].id;
+      }
+      saveConversationsState();
+      renderConversationList();
+      renderMessages();
+      updateTopbarTitle();
+    }
+
+    function appendMessage(role, text, conversationId = activeConversationId) {
+      const conv = conversations.find((item) => item.id === conversationId);
+      if (!conv) return null;
+      const msg = { id: newId("msg"), role: role, text: String(text) };
+      conv.messages.push(msg);
+      conv.updated_at = Date.now();
+      saveConversationsState();
+      if (conversationId === activeConversationId) {
+        renderMessages();
+      }
+      return msg.id;
+    }
+
+    function updateMessageText(messageId, text, conversationId = activeConversationId) {
+      const conv = conversations.find((item) => item.id === conversationId);
+      if (!conv) return;
+      const target = conv.messages.find((item) => item.id === messageId);
+      if (!target) return;
+      target.text = String(text || "");
+      conv.updated_at = Date.now();
+      saveConversationsState();
+      if (conversationId === activeConversationId) {
+        renderMessages();
+      }
+    }
+
+    function loadPromptSettings() {
+      const defaults = {
+        max_new_tokens: 4,
+        do_sample: "false",
+        history_turns: 6,
+        system_context: "",
+      };
+      let parsed = {};
+      let fromLegacy = false;
+      try {
+        const rawV2 = localStorage.getItem(PROMPT_SETTINGS_STORAGE_KEY);
+        if (rawV2) {
+          parsed = JSON.parse(rawV2);
+        } else {
+          const rawLegacy = localStorage.getItem(LEGACY_PROMPT_SETTINGS_STORAGE_KEY);
+          fromLegacy = !!rawLegacy;
+          parsed = rawLegacy ? JSON.parse(rawLegacy) : {};
+        }
+      } catch (_) {
+        parsed = {};
+      }
+      if (!parsed || typeof parsed !== "object") {
+        parsed = {};
+      }
+
+      let maxNewTokens = Number(parsed.max_new_tokens);
+      if (!Number.isFinite(maxNewTokens) || maxNewTokens <= 0) {
+        maxNewTokens = defaults.max_new_tokens;
+      }
+      if (fromLegacy && maxNewTokens === 64) {
+        maxNewTokens = defaults.max_new_tokens;
+      }
+
+      const historyTurnsRaw = Number(parsed.history_turns);
+      const historyTurns = Number.isFinite(historyTurnsRaw) && historyTurnsRaw >= 0
+        ? historyTurnsRaw
+        : defaults.history_turns;
+
+      const settings = {
+        max_new_tokens: maxNewTokens,
+        do_sample: parsed.do_sample === "true" ? "true" : defaults.do_sample,
+        history_turns: historyTurns,
+        system_context: String(parsed.system_context || defaults.system_context),
+      };
+
+      document.getElementById("maxNewTokens").value = String(settings.max_new_tokens);
+      document.getElementById("doSample").value = settings.do_sample;
+      document.getElementById("historyTurns").value = String(settings.history_turns);
+      document.getElementById("systemContext").value = settings.system_context;
+      localStorage.setItem(PROMPT_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    }
+
+    function savePromptSettings(showStatus = true) {
+      const maxTokensRaw = Number(document.getElementById("maxNewTokens").value);
+      const historyTurnsRaw = Number(document.getElementById("historyTurns").value);
+      const payload = {
+        max_new_tokens: Number.isFinite(maxTokensRaw) && maxTokensRaw > 0 ? maxTokensRaw : 4,
+        do_sample: String(document.getElementById("doSample").value || "false").toLowerCase() === "true" ? "true" : "false",
+        history_turns: Number.isFinite(historyTurnsRaw) && historyTurnsRaw >= 0 ? historyTurnsRaw : 6,
+        system_context: String(document.getElementById("systemContext").value || ""),
+      };
+      localStorage.setItem(PROMPT_SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+      if (showStatus) {
+        setSettingsStatus({ status: "prompt_settings_saved", ...payload });
+      }
+    }
+
+    function buildModelPrompt(userPrompt) {
+      const conv = getActiveConversation();
+      const context = String(document.getElementById("systemContext").value || "").trim();
+      const historyTurns = Math.max(0, Number(document.getElementById("historyTurns").value || 6));
+      const parts = [];
+      if (context) {
+        parts.push("System context:\\n" + context);
+      }
+      if (conv) {
+        const history = conv.messages.filter((item) => item.role === "user" || item.role === "assistant");
+        const maxMessages = historyTurns * 2;
+        const recent = maxMessages > 0 ? history.slice(-maxMessages) : [];
+        if (recent.length) {
+          parts.push(
+            "Conversation history:\\n" +
+              recent.map((msg) => (msg.role === "user" ? "User: " : "Assistant: ") + msg.text).join("\\n\\n")
+          );
+        }
+      }
+      parts.push("User: " + userPrompt + "\\nAssistant:");
+      return parts.join("\\n\\n");
+    }
+
+    function switchTab(tab) {
+      const isChat = tab === "chat";
+      const isNotifications = tab === "notifications";
+      const isSettings = tab === "settings";
+      document.getElementById("chatPanel").classList.toggle("active", isChat);
+      document.getElementById("notificationsPanel").classList.toggle("active", isNotifications);
+      document.getElementById("settingsPanel").classList.toggle("active", isSettings);
+      document.getElementById("tabChatBtn").classList.toggle("active", isChat);
+      document.getElementById("tabNotificationsBtn").classList.toggle("active", isNotifications);
+      document.getElementById("tabSettingsBtn").classList.toggle("active", isSettings);
+      updateTopbarTitle();
+    }
+
+    function setDownloadTabIndicator(active) {
+      const badge = document.getElementById("settingsDownloadBadge");
+      if (!badge) return;
+      badge.classList.toggle("hidden", !active);
+    }
+
+    function setDownloadUiBusy(active) {
+      const hfButton = document.getElementById("hfDownloadBtn");
+      const modalButton = document.getElementById("modalDownloadBtn");
+      if (hfButton) {
+        hfButton.disabled = !!active;
+      }
+      if (modalButton) {
+        modalButton.disabled = !!active;
+      }
+    }
+
+    function setModelLoadUiBusy(active) {
+      const loadButton = document.getElementById("loadModelBtn");
+      const stopButton = document.getElementById("modelLoadStopBtn");
+      if (loadButton) {
+        loadButton.disabled = !!active;
+        loadButton.textContent = active ? "Loading Model..." : "Load / Reload Model";
+      }
+      if (stopButton) {
+        stopButton.classList.toggle("hidden", !active);
+        stopButton.disabled = !active;
+      }
+      if (active) {
+        setChatComposerEnabled(false, "Model is loading. Please wait...");
+      } else if (hasModelIssue) {
+        setChatComposerEnabled(false, "Model issue detected. Open Settings to resolve before chatting.");
+      } else {
+        setChatComposerEnabled(true, "");
+      }
+    }
+
+    function setModelLoadProgress(progress, statusText, metaText) {
+      const wrap = document.getElementById("modelLoadProgressWrap");
+      const bar = document.getElementById("modelLoadProgressBar");
+      const text = document.getElementById("modelLoadProgressText");
+      const meta = document.getElementById("modelLoadProgressMeta");
+      if (!wrap || !bar || !text || !meta) return;
+
+      const pct = Math.max(0, Math.min(100, Number(progress || 0)));
+      wrap.classList.remove("hidden");
+      bar.style.width = pct + "%";
+      text.textContent = (statusText || "Loading model...") + " (" + pct + "%)";
+      meta.textContent = metaText || "Loading model into memory. This can take a while for larger models.";
+    }
+
+    function startModelLoadProgress(metaText = "") {
+      isModelLoading = true;
+      modelLoadProgress = 0;
+      setModelLoadUiBusy(true);
+      setModelLoadProgress(modelLoadProgress, "Loading model...", metaText);
+    }
+
+    function finishModelLoadProgress(success, message = "") {
+      isModelLoading = false;
+      activeModelLoadJobId = null;
+      setModelLoadUiBusy(false);
+
+      const wrap = document.getElementById("modelLoadProgressWrap");
+      if (!wrap) return;
+
+      if (success) {
+        setModelLoadProgress(100, "Model loaded", message || "Model is ready.");
+        setTimeout(() => {
+          if (!isModelLoading) {
+            wrap.classList.add("hidden");
+          }
+        }, 900);
+        return;
+      }
+
+      setModelLoadProgress(modelLoadProgress || 0, "Model load failed", message || "Check settings status for details.");
+    }
+
+    function applyTheme(theme) {
+      currentTheme = theme === "dark" ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", currentTheme);
+      document.body.setAttribute("data-theme", currentTheme);
+      localStorage.setItem("airllm_theme", currentTheme);
+      const toggle = document.getElementById("themeToggle");
+      if (toggle) {
+        toggle.textContent = currentTheme === "dark" ? "Light" : "Dark";
+      }
+      applySettingsThemeFixes();
+    }
+
+    function toggleTheme() {
+      applyTheme(currentTheme === "dark" ? "light" : "dark");
+    }
+
+    function initTheme() {
+      const stored = localStorage.getItem("airllm_theme");
+      if (stored === "dark" || stored === "light") {
+        applyTheme(stored);
+        return;
+      }
+      const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      applyTheme(prefersDark ? "dark" : "light");
+    }
+
+    function switchSettingsTab(tab) {
+      const isConfig = tab === "config";
+      const isPrompt = tab === "prompt";
+      const isDownload = tab === "download";
+      document.getElementById("settingsConfigPanel").classList.toggle("active", isConfig);
+      document.getElementById("settingsPromptPanel").classList.toggle("active", isPrompt);
+      document.getElementById("settingsDownloadPanel").classList.toggle("active", isDownload);
+      document.getElementById("settingsTabConfigBtn").classList.toggle("active", isConfig);
+      document.getElementById("settingsTabPromptBtn").classList.toggle("active", isPrompt);
+      document.getElementById("settingsTabDownloadBtn").classList.toggle("active", isDownload);
+      applySettingsThemeFixes();
+    }
+
+    function applySettingsThemeFixes() {
+      const palette = currentTheme === "dark"
+        ? {
+            text: "#e5e7eb",
+            muted: "#9ca3af",
+            accent: "#2563eb",
+            accentText: "#f8fafc",
+            border: "#1f2937",
+            panel: "#111827",
+            panelSoft: "#0f172a",
+          }
+        : {
+            text: "#0f172a",
+            muted: "#64748b",
+            accent: "#0f172a",
+            accentText: "#ffffff",
+            border: "#e2e8f0",
+            panel: "#ffffff",
+            panelSoft: "#f8fafc",
+          };
+
+      const status = document.getElementById("settingsStatus");
+      if (status) {
+        status.style.background = palette.panelSoft;
+        status.style.color = palette.text;
+        status.style.border = "1px solid " + palette.border;
+      }
+
+      const tabButtons = [
+        document.getElementById("settingsTabConfigBtn"),
+        document.getElementById("settingsTabPromptBtn"),
+        document.getElementById("settingsTabDownloadBtn"),
+      ];
+      for (const btn of tabButtons) {
+        if (!btn) continue;
+        const isActive = btn.classList.contains("active");
+        btn.style.background = isActive ? palette.accent : palette.panel;
+        btn.style.color = isActive ? palette.accentText : palette.muted;
+        btn.style.webkitTextFillColor = isActive ? palette.accentText : palette.muted;
+        btn.style.border = "1px solid " + (isActive ? palette.accent : palette.border);
+      }
+    }
+
+    function modelDisplayName(data) {
+      if (data && data.model_id) return data.model_id;
+      const src = (data && data.model_source) || "";
+      if (!src) return "-";
+      const parts = src.split(/[\\\\/]/).filter(Boolean);
+      return parts.length ? parts[parts.length - 1] : src;
+    }
+
+    function openModelIssueSettings() {
+      switchTab("settings");
+      switchSettingsTab("config");
+      const target = document.getElementById("modelPath") || document.getElementById("modelId");
+      if (target) {
+        target.focus();
+      }
+    }
+
+    function setChatComposerEnabled(enabled, issueMessage = "") {
+      const promptBox = document.getElementById("prompt");
+      const sendBtn = document.getElementById("chatSendBtn");
+      const stopBtn = document.getElementById("chatStopBtn");
+      const hint = document.getElementById("chatInputHint");
+      const shouldDisableInput = !enabled || isGenerating;
+      if (promptBox) {
+        promptBox.disabled = shouldDisableInput;
+      }
+      if (sendBtn) {
+        sendBtn.disabled = shouldDisableInput;
+      }
+      if (stopBtn) {
+        stopBtn.classList.toggle("hidden", !isGenerating);
+      }
+      if (hint && !isGenerating) {
+        hint.textContent = enabled
+          ? "Press Enter to send"
+          : (issueMessage || "Model issue detected. Open Settings to resolve before chatting.");
+      }
+    }
+
+    function updateGenerationStatusLabel() {
+      const statusEl = document.getElementById("generationStatus");
+      if (!statusEl) {
+        return;
+      }
+      if (!isGenerating) {
+        statusEl.textContent = "";
+        return;
+      }
+      const elapsedSec = Math.max(0, Math.floor((Date.now() - generationStartedAt) / 1000));
+      if (generationExpectedSeconds > 0) {
+        const remainingSec = Math.max(0, Math.floor(generationExpectedSeconds - elapsedSec));
+        statusEl.textContent = "Generating... " + elapsedSec + "s elapsed" + (remainingSec > 0 ? " (~" + remainingSec + "s est left)" : "");
+      } else {
+        statusEl.textContent = "Generating... " + elapsedSec + "s elapsed";
+      }
+    }
+
+    function setGeneratingState(active, maxNewTokens = 0) {
+      if (generationStatusTimer) {
+        clearInterval(generationStatusTimer);
+        generationStatusTimer = null;
+      }
+
+      if (active) {
+        generationStartedAt = Date.now();
+        generationExpectedSeconds = Math.max(0, Number(maxNewTokens || 0)) * 9;
+        updateGenerationStatusLabel();
+        generationStatusTimer = setInterval(updateGenerationStatusLabel, 1000);
+      } else {
+        generationStartedAt = 0;
+        generationExpectedSeconds = 0;
+        updateGenerationStatusLabel();
+      }
+
+      const issueMessage = hasModelIssue
+        ? "Model issue detected. Open Settings to resolve before chatting."
+        : "";
+      const enabled = !hasModelIssue && !isModelLoading;
+      setChatComposerEnabled(enabled, issueMessage);
+    }
+
+    function cancelGeneration() {
+      if (!isGenerating) {
+        return;
+      }
+      if (activeGenerateAbortController) {
+        activeGenerateAbortController.abort();
+      }
+    }
+
+    function applyTopbarModelState(isError, message) {
+      const topbarModel = document.getElementById("topbarModel");
+      if (!topbarModel) return;
+      hasModelIssue = !!isError;
+      topbarModel.classList.toggle("error", !!isError);
+      topbarModel.classList.toggle("clickable", !!isError);
+      if (isError) {
+        topbarModel.title = message || "Model issue detected. Click to open settings.";
+        topbarModel.onclick = openModelIssueSettings;
+        setChatComposerEnabled(false, message);
+      } else {
+        topbarModel.title = "";
+        topbarModel.onclick = null;
+        setChatComposerEnabled(true, "");
+      }
+    }
+
+    async function refreshModelIssueIndicator(data) {
+      if (data && data.model_loaded) {
+        applyTopbarModelState(false, "");
+        return;
+      }
+      let issueMessage = "Model is not loaded. Click to open Settings and select/load a model.";
+      try {
+        const resolved = await apiJson("/model/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model_id: (data && data.model_id) || null,
+            model_path: (data && data.model_path) || null,
+            model_base_dir: (data && data.model_base_dir) || null,
+            device: (data && data.device) || null
+          })
+        });
+        if (resolved && resolved.local_expected && resolved.exists === false) {
+          issueMessage = "Configured local model path is missing. Click to open Settings and pick another model.";
+        }
+      } catch (_) {
+      }
+      applyTopbarModelState(true, issueMessage);
+    }
+
+    function setSettingsStatus(obj) {
+      document.getElementById("settingsStatus").textContent = JSON.stringify(obj, null, 2);
+      applySettingsThemeFixes();
+    }
+
+    function asBool(value) {
+      return String(value).toLowerCase() === "true";
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    async function apiJson(url, options = {}) {
+      let response;
+      try {
+        response = await fetch(url, options);
+      } catch (fetchErr) {
+        const error = new Error(
+          "Network error contacting backend. Check that app.py is still running and review terminal logs for OOM/crash details."
+        );
+        error.isNetworkError = true;
+        error.cause = fetchErr;
+        throw error;
+      }
+
+      let data = null;
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        try {
+          data = await response.json();
+        } catch (_) {
+          data = null;
+        }
+      } else {
+        try {
+          const raw = await response.text();
+          data = raw ? { detail: raw } : null;
+        } catch (_) {
+          data = null;
+        }
+      }
+
+      if (!response.ok) {
+        let message = "";
+        if (data && typeof data === "object" && data.detail) {
+          message = String(data.detail);
+        } else {
+          message = typeof data === "object" ? JSON.stringify(data) : String(data || "Request failed.");
+        }
+        const error = new Error(message);
+        error.status = response.status;
+        error.payload = data;
+        throw error;
+      }
+      return data;
+    }
+
+    function syncModalFieldsFromSettings() {
+      document.getElementById("modalHfModelId").value = document.getElementById("hfModelId").value || document.getElementById("modelId").value || "";
+      document.getElementById("modalHfRevision").value = document.getElementById("hfRevision").value || "";
+      document.getElementById("modalHfSubdir").value = document.getElementById("hfSubdir").value || "";
+      document.getElementById("modalHfAllowPatterns").value = document.getElementById("hfAllowPatterns").value || "";
+      document.getElementById("modalHfIgnorePatterns").value = document.getElementById("hfIgnorePatterns").value || "";
+      document.getElementById("modalHfSetActive").checked = document.getElementById("hfSetActive").checked;
+    }
+
+    function openDownloadModal(resolveData) {
+      syncModalFieldsFromSettings();
+      if (resolveData && resolveData.model_id) {
+        document.getElementById("modalHfModelId").value = resolveData.model_id;
+      }
+      const modal = document.getElementById("downloadModal");
+      document.getElementById("downloadModalHint").textContent =
+        "Expected local path: " + (resolveData.model_source || "(unknown)") + " | Base directory: " + (resolveData.model_base_dir || "(unset)");
+      modal.classList.add("active");
+    }
+
+    function closeDownloadModal(clearPending = true) {
+      document.getElementById("downloadModal").classList.remove("active");
+      if (clearPending) {
+        pendingLoadPayload = null;
+      }
+    }
+
+    function setDownloadProgress(job) {
+      const bar = document.getElementById("downloadProgressBar");
+      const pct = Number(job.progress || 0);
+      bar.style.width = Math.max(0, Math.min(100, pct)) + "%";
+      document.getElementById("downloadProgressText").textContent =
+        (job.status || "unknown") + " - " + pct + "% (" + (job.current || 0) + "/" + (job.total || "?") + ")";
+      document.getElementById("downloadJobMeta").textContent =
+        "Job: " + (job.job_id || "-") + " | Model: " + (job.model_id || "-") + " | Target: " + (job.target_dir || "-") +
+        (job.current_file ? " | File: " + job.current_file : "");
+      const logs = job.logs || [];
+      document.getElementById("downloadLogBox").textContent = logs.length ? logs.join("\\n") : "No logs yet.";
+      const active = job.status === "queued" || job.status === "downloading";
+      setDownloadTabIndicator(active);
+      setDownloadUiBusy(active);
+    }
+
+    function stopDownloadPolling() {
+      if (downloadPollTimer) {
+        clearInterval(downloadPollTimer);
+        downloadPollTimer = null;
+      }
+      activeDownloadJobId = null;
+      localStorage.removeItem("airllm_download_job_id");
+      setDownloadTabIndicator(false);
+      setDownloadUiBusy(false);
+    }
+
+    async function pollDownloadJob(jobId, options = {}) {
+      const closeModalOnComplete = !!options.closeModalOnComplete;
+      const triggerPendingLoad = !!options.triggerPendingLoad;
+      stopDownloadPolling();
+      activeDownloadJobId = jobId;
+      localStorage.setItem("airllm_download_job_id", jobId);
+      setDownloadTabIndicator(true);
+      setDownloadUiBusy(true);
+
+      async function tick() {
+        if (!activeDownloadJobId) return;
+        const data = await apiJson("/hf/download/" + encodeURIComponent(activeDownloadJobId));
+        setDownloadProgress(data);
+        if (data.status === "failed") {
+          stopDownloadPolling();
+          setSettingsStatus(data);
+          pushNotification("Download failed: " + (data.error || "unknown error"), "error");
+          if (closeModalOnComplete) {
+            closeDownloadModal();
+          }
+          return;
+        }
+        if (data.status === "completed") {
+          stopDownloadPolling();
+          setSettingsStatus(data);
+          pushNotification("Download completed: " + (data.model_id || ""), "success");
+          if (data.model_id) {
+            document.getElementById("modelId").value = data.model_id;
+            document.getElementById("hfModelId").value = data.model_id;
+          }
+          if (data.target_dir) {
+            document.getElementById("modelPath").value = data.target_dir;
+          }
+          if (data.base_dir) {
+            document.getElementById("modelBaseDir").value = data.base_dir;
+          }
+
+          switchTab("settings");
+          switchSettingsTab("config");
+
+          const health = await refreshStatus();
+          await refreshModels(document.getElementById("modelPath").value || "", true);
+          if (closeModalOnComplete) {
+            closeDownloadModal(false);
+          }
+
+          if (triggerPendingLoad && pendingLoadPayload) {
+            const payload = pendingLoadPayload;
+            pendingLoadPayload = null;
+            await executeLoadWithProgress(payload, "Download complete. Loading downloaded model.");
+          } else if (!(health && health.model_loaded)) {
+            const autoLoadPayload = {
+              model_id: document.getElementById("modelId").value || null,
+              model_path: document.getElementById("modelPath").value || null,
+              model_base_dir: document.getElementById("modelBaseDir").value || null,
+              device: document.getElementById("device").value || null,
+              force_reload: false,
+              persist_env: document.getElementById("persistEnv").checked
+            };
+            try {
+              await executeLoadWithProgress(autoLoadPayload, "Download complete. Loading model automatically.");
+            } catch (loadErr) {
+              setSettingsStatus({
+                status: "post_download_autoload_failed",
+                error: String(loadErr),
+                download_job: data.job_id || null,
+                model_id: data.model_id || autoLoadPayload.model_id || null,
+                model_path: autoLoadPayload.model_path || null
+              });
+              pushNotification("Download finished, but automatic model load failed: " + String(loadErr), "error");
+            }
+          }
+        }
+      }
+
+      await tick();
+      if (activeDownloadJobId) {
+        downloadPollTimer = setInterval(() => {
+          tick().catch((err) => {
+            stopDownloadPolling();
+            setSettingsStatus({ error: String(err) });
+          });
+        }, 1000);
+      }
+    }
+
+    async function resumeActiveDownloadFromServer() {
+      const active = await apiJson("/hf/download/active");
+      if (active && active.job_id) {
+        await pollDownloadJob(active.job_id);
+        return true;
+      }
+      return false;
+    }
+
+    async function initDownloadState() {
+      setDownloadProgress({
+        job_id: "-",
+        model_id: "-",
+        target_dir: "-",
+        status: "idle",
+        progress: 0,
+        current: 0,
+        total: null,
+        logs: ["No active downloads."],
+      });
+
+      const resumeJobId = localStorage.getItem("airllm_download_job_id");
+      if (resumeJobId) {
+        try {
+          await pollDownloadJob(resumeJobId);
+          return;
+        } catch (err) {
+          localStorage.removeItem("airllm_download_job_id");
+          const message = String(err || "");
+          if (!message.includes("No download job found")) {
+            setSettingsStatus({ error: message });
+          }
+        }
+      }
+
+      try {
+        await resumeActiveDownloadFromServer();
+      } catch (err) {
+        setSettingsStatus({ error: String(err) });
+      }
+    }
+
+    function normalizeRepoPath(value) {
+      return String(value || "")
+        .trim()
+        .replace(/\\/g, "/")
+        .replace(/^\/+|\/+$/g, "");
+    }
+
+    function setModelOptimizationBadge(runtimeMode, note) {
+      const badgeEl = document.getElementById("modelOptimizationBadge");
+      const hintEl = document.getElementById("modelOptimizationHint");
+      if (!badgeEl || !hintEl) {
+        return;
+      }
+
+      const mode = String(runtimeMode || "").toLowerCase();
+      badgeEl.classList.remove("airllm", "standard", "error");
+      if (mode === "airllm") {
+        badgeEl.classList.add("airllm");
+        badgeEl.textContent = "Runtime: AirLLM Optimized";
+      } else if (mode === "transformers") {
+        badgeEl.classList.add("standard");
+        badgeEl.textContent = "Runtime: Standard Transformers";
+      } else if (mode === "llama_cpp") {
+        badgeEl.classList.add("standard");
+        badgeEl.textContent = "Runtime: llama.cpp";
+      } else if (mode === "llama_server") {
+        badgeEl.classList.add("standard");
+        badgeEl.textContent = "Runtime: llama-server";
+      } else if (mode === "unsupported") {
+        badgeEl.classList.add("error");
+        badgeEl.textContent = "Runtime: Unsupported";
+      } else {
+        badgeEl.classList.add("standard");
+        badgeEl.textContent = "Runtime: Not selected";
+      }
+
+      hintEl.textContent = String(note || "Select a model to view optimization status.");
+    }
+    function updateModelBadgeFromSelection() {
+      const select = document.getElementById("modelSelect");
+      if (!select || !select.options || select.selectedIndex < 0) {
+        setModelOptimizationBadge(null, "Select a model to view optimization status.");
+        return;
+      }
+
+      const selected = select.options[select.selectedIndex];
+      if (!selected || !selected.value) {
+        setModelOptimizationBadge(null, "Select a model to view optimization status.");
+        return;
+      }
+
+      const runtimeMode = selected.dataset.runtimeMode || "transformers";
+      const unsupportedReason = selected.dataset.unsupportedReason || "";
+      const note = (runtimeMode === "unsupported" ? unsupportedReason : "") || selected.dataset.optimizationNote || "";
+      setModelOptimizationBadge(runtimeMode, note);
+    }
+    function renderHFCompatibility(data) {
+      const summaryEl = document.getElementById("hfCompatSummary");
+      const detailsEl = document.getElementById("hfCompatDetails");
+      const badgeEl = document.getElementById("hfCompatRuntimeBadge");
+      if (!summaryEl || !detailsEl || !badgeEl) {
+        return;
+      }
+
+      badgeEl.classList.remove("airllm", "standard", "error");
+
+      if (!data) {
+        summaryEl.textContent = "Compatibility not checked yet.";
+        detailsEl.textContent = "Run compatibility check to validate model type and architecture support before downloading.";
+        badgeEl.classList.add("standard");
+        badgeEl.textContent = "Not checked";
+        return;
+      }
+
+      const warningCount = Array.isArray(data.warnings) ? data.warnings.length : 0;
+      const reasonCount = Array.isArray(data.reasons) ? data.reasons.length : 0;
+      const modelType = data.model_type || "-";
+
+      if (data.supported) {
+        if (data.airllm_optimized) {
+          badgeEl.classList.add("airllm");
+          badgeEl.textContent = "AirLLM Optimized";
+          summaryEl.textContent = "Compatible | model_type: " + modelType + (warningCount ? " | warnings: " + warningCount : "");
+        } else {
+          badgeEl.classList.add("standard");
+          badgeEl.textContent = "Standard Transformers";
+          summaryEl.textContent = "Compatible (without AirLLM optimization) | model_type: " + modelType + (warningCount ? " | warnings: " + warningCount : "");
+        }
+      } else {
+        badgeEl.classList.add("error");
+        badgeEl.textContent = "Not Compatible";
+        summaryEl.textContent = "Not compatible | model_type: " + modelType + (reasonCount ? " | reasons: " + reasonCount : "");
+      }
+
+      detailsEl.textContent = JSON.stringify(data, null, 2);
+    }
+    async function checkHFCompatibility(showStatus = false, modelIdOverride = null, revisionOverride = null) {
+      const modelId = normalizeRepoPath(
+        modelIdOverride ||
+        document.getElementById("hfModelId").value ||
+        document.getElementById("modelId").value ||
+        ""
+      );
+      if (!modelId) {
+        const missing = {
+          status: "compatibility_check_failed",
+          supported: false,
+          reasons: ["model_id is required."],
+          warnings: [],
+        };
+        renderHFCompatibility(missing);
+        if (showStatus) {
+          setSettingsStatus(missing);
+        }
+        return missing;
+      }
+
+      document.getElementById("hfModelId").value = modelId;
+      const revision = String(
+        revisionOverride != null ? revisionOverride : (document.getElementById("hfRevision").value || "")
+      ).trim();
+      const url =
+        "/hf/compatibility?model_id=" + encodeURIComponent(modelId) +
+        (revision ? "&revision=" + encodeURIComponent(revision) : "");
+
+      const data = await apiJson(url);
+      lastHFCompatibility = data;
+      renderHFCompatibility(data);
+      if (showStatus) {
+        setSettingsStatus(data);
+      }
+      return data;
+    }
+
+    async function ensureHFCompatibilityBeforeDownload(modelId, revision) {
+      const compatibility = await checkHFCompatibility(false, modelId, revision);
+      if (compatibility && compatibility.supported === false) {
+        const reasons = Array.isArray(compatibility.reasons) && compatibility.reasons.length
+          ? compatibility.reasons
+          : ["Unknown compatibility issue."];
+        const proceed = confirm(
+          "Compatibility check indicates this model may not run with the current runtime.\n\n- " +
+          reasons.join("\n- ") +
+          "\n\nDownload anyway?"
+        );
+        if (!proceed) {
+          setSettingsStatus({
+            status: "download_blocked_by_compatibility_check",
+            model_id: modelId,
+            revision: revision || null,
+            compatibility,
+          });
+          return { proceed: false, compatibility };
+        }
+      }
+      return { proceed: true, compatibility };
+    }
+    function deriveModelIdFromSelection(baseDir, selectedPath, selectedLabel = "") {
+      const cleanLabel = normalizeRepoPath(selectedLabel);
+      if (cleanLabel && cleanLabel !== ".") {
+        return cleanLabel;
+      }
+
+      const cleanBase = normalizeRepoPath(baseDir);
+      const cleanPath = normalizeRepoPath(selectedPath);
+      if (!cleanPath) {
+        return "";
+      }
+
+      if (cleanBase) {
+        const lowerBase = cleanBase.toLowerCase();
+        const lowerPath = cleanPath.toLowerCase();
+        if (lowerPath === lowerBase) {
+          const baseParts = cleanPath.split("/");
+          return baseParts[baseParts.length - 1] || "";
+        }
+        const prefix = lowerBase + "/";
+        if (lowerPath.startsWith(prefix)) {
+          return cleanPath.slice(cleanBase.length + 1);
+        }
+      }
+
+      const parts = cleanPath.split("/");
+      return parts[parts.length - 1] || "";
+    }
+
+    function applySelectedModel() {
+      const select = document.getElementById("modelSelect");
+      const selected = select.value;
+      if (!selected) {
+        setModelOptimizationBadge(null, "Select a model to view optimization status.");
+        return;
+      }
+
+      document.getElementById("modelPath").value = selected;
+
+      const selectedOption = select.options[select.selectedIndex];
+      const selectedLabel = selectedOption ? (selectedOption.dataset.modelLabel || "") : "";
+      const runtimeMode = selectedOption ? (selectedOption.dataset.runtimeMode || "transformers") : "transformers";
+      const optimizationNote = selectedOption ? (selectedOption.dataset.optimizationNote || "") : "";
+      const unsupportedReason = selectedOption ? (selectedOption.dataset.unsupportedReason || "") : "";
+      const baseDir = document.getElementById("modelBaseDir").value || "";
+      const inferredModelId = deriveModelIdFromSelection(baseDir, selected, selectedLabel);
+
+      if (inferredModelId) {
+        document.getElementById("modelId").value = inferredModelId;
+        document.getElementById("hfModelId").value = inferredModelId;
+      }
+
+      if (runtimeMode === "unsupported") {
+        const reasonText = unsupportedReason || "This model directory was detected as unsupported by the current runtime checks.";
+        setModelOptimizationBadge("unsupported", reasonText);
+        pushNotification("Unsupported model selected. Reason: " + reasonText, "warning");
+        return;
+      }
+
+      setModelOptimizationBadge(runtimeMode, optimizationNote || "Model selected from discovered checkpoints.");
+      if (runtimeMode === "transformers") {
+        pushNotification("This model is usable, but AirLLM optimizations are unavailable. Standard Transformers runtime will be used.", "info");
+      }
+    }
+    function clearModelPath() {
+      document.getElementById("modelPath").value = "";
+      document.getElementById("modelSelect").value = "";
+    }
+
+    async function refreshModels(selectedPath = "", keepStatus = false) {
+      const baseDir = document.getElementById("modelBaseDir").value || "";
+      const select = document.getElementById("modelSelect");
+      const info = document.getElementById("modelScanInfo");
+      select.innerHTML = "";
+      if (!baseDir) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "(set AIRLLM_MODEL_BASE_DIR first)";
+        select.appendChild(option);
+        info.textContent = "Set a base directory, then scan.";
+        setModelOptimizationBadge(null, "Select a model to view optimization status.");
+        return;
+      }
+
+      const data = await apiJson("/models?base_dir=" + encodeURIComponent(baseDir));
+      const models = Array.isArray(data.models) ? data.models : [];
+      const unsupportedModels = Array.isArray(data.unsupported_models) ? data.unsupported_models : [];
+
+      const empty = document.createElement("option");
+      empty.value = "";
+      const discoveredTotal = models.length + unsupportedModels.length;
+      empty.textContent = discoveredTotal ? "(select discovered model directory)" : "(no model directories found)";
+      select.appendChild(empty);
+
+      for (const model of models) {
+        const option = document.createElement("option");
+        option.value = model.path;
+        const runtimeMode = String(model.runtime_mode || "transformers").toLowerCase() === "airllm" ? "airllm" : "transformers";
+        const badgeLabel = runtimeMode === "airllm" ? "[AirLLM]" : "[Standard]";
+        option.textContent = badgeLabel + " " + model.label + " -> " + model.path;
+        option.dataset.modelLabel = model.label || "";
+        option.dataset.runtimeMode = runtimeMode;
+        option.dataset.airllmOptimized = model.airllm_optimized ? "true" : "false";
+        option.dataset.optimizationNote = model.optimization_note || "";
+        if (selectedPath && selectedPath === model.path) {
+          option.selected = true;
+        }
+        select.appendChild(option);
+      }
+
+      for (const unsupported of unsupportedModels) {
+        const option = document.createElement("option");
+        option.value = unsupported.path;
+        option.textContent = "[Unsupported] " + unsupported.label + " -> " + unsupported.path;
+        option.dataset.modelLabel = unsupported.label || "";
+        option.dataset.runtimeMode = "unsupported";
+        option.dataset.optimizationNote = "Detected as unsupported by runtime checks.";
+        option.dataset.unsupportedReason = unsupported.reason || "Unsupported model directory.";
+        if (selectedPath && selectedPath === unsupported.path) {
+          option.selected = true;
+        }
+        select.appendChild(option);
+      }
+
+      if (selectedPath) {
+        const existsInList =
+          models.some((m) => m.path === selectedPath) ||
+          unsupportedModels.some((m) => m.path === selectedPath);
+        if (!existsInList) {
+          const current = document.createElement("option");
+          current.value = selectedPath;
+          current.selected = true;
+          current.textContent = "[manual] " + selectedPath;
+          current.dataset.runtimeMode = "transformers";
+          current.dataset.optimizationNote = "Manual path selected. Runtime mode will be resolved when loaded.";
+          select.appendChild(current);
+        }
+      }
+
+      const optimizedCount = models.filter((m) => !!m.airllm_optimized).length;
+      const standardCount = Math.max(0, models.length - optimizedCount);
+      const unsupportedCount = unsupportedModels.length;
+      const scanErrorCount = (data.scan_errors || []).length;
+      info.textContent =
+        "Discovered: " + discoveredTotal +
+        " | AirLLM optimized: " + optimizedCount +
+        " | Standard runtime: " + standardCount +
+        " | Unsupported: " + unsupportedCount +
+        " | Scan errors: " + scanErrorCount;
+
+      updateModelBadgeFromSelection();
+
+      if (!keepStatus) {
+        setSettingsStatus(data);
+      }
+      if (data.scan_errors && data.scan_errors.length) {
+        setSettingsStatus(data);
+      }
+    }
+    async function refreshStatus() {
+      const data = await apiJson("/health");
+      lastStatus = data;
+      document.getElementById("runtimeMeta").textContent = JSON.stringify(data, null, 2);
+      const modelLabel = modelDisplayName(data);
+      const runtimeBadge = data.runtime_backend === "airllm"
+        ? " [AirLLM]"
+        : (data.runtime_backend === "transformers"
+          ? " [Standard]"
+          : (data.runtime_backend === "llama_cpp"
+            ? " [llama.cpp]"
+            : (data.runtime_backend === "llama_server" ? " [llama-server]" : "")));
+      document.getElementById("topbarModel").textContent = "Model: " + modelLabel + runtimeBadge + (data.model_loaded ? "" : " (Issue)");
+      await refreshModelIssueIndicator(data);
+      document.getElementById("modelId").value = data.model_id || "";
+      document.getElementById("modelPath").value = data.model_path || "";
+      document.getElementById("modelBaseDir").value = data.model_base_dir || "";
+      document.getElementById("device").value = data.device || "";
+      if (!document.getElementById("hfModelId").value) {
+        document.getElementById("hfModelId").value = data.model_id || "";
+      }
+      await refreshModels(data.model_path || "", true);
+      if (data.model_loaded) {
+        const runtimeNote = data.runtime_note || (data.runtime_backend === "airllm"
+          ? "AirLLM optimization enabled for the active model."
+          : (data.runtime_backend === "llama_cpp"
+            ? "Active model is running on llama.cpp runtime."
+            : (data.runtime_backend === "llama_server"
+              ? "Active model is running on llama-server runtime."
+              : "Active model is running on standard Transformers runtime.")));
+        setModelOptimizationBadge(data.runtime_backend || null, runtimeNote);
+      }
+      return data;
+    }
+
+    async function saveSettings() {
+      const payload = {
+        model_id: document.getElementById("modelId").value || null,
+        model_path: document.getElementById("modelPath").value || null,
+        model_base_dir: document.getElementById("modelBaseDir").value || null,
+        device: document.getElementById("device").value || null,
+        persist_env: document.getElementById("persistEnv").checked
+      };
+      const data = await apiJson("/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      setSettingsStatus(data);
+      await refreshStatus();
+    }
+
+    function applyModelLoadJobProgress(job, fallbackMeta = "") {
+      const pct = Math.max(0, Math.min(100, Number(job.progress || 0)));
+      modelLoadProgress = pct;
+
+      const stalled = !!job.stalled;
+      const stallSeconds = Math.max(0, Number(job.stall_seconds || 0));
+      const isFinalizing = job.status === "loading" && (job.stage === "finalizing" || pct >= 99);
+
+      let statusText = "Loading model...";
+      if (job.status === "completed") {
+        statusText = "Model loaded";
+      } else if (job.status === "canceled") {
+        statusText = "Model load canceled";
+      } else if (job.status === "failed") {
+        statusText = "Model load failed";
+      } else if (isFinalizing) {
+        statusText = stalled ? "Finalizing model (slow)..." : "Finalizing model...";
+      }
+
+      let meta = String(job.message || "").trim();
+      if (job.current != null && job.total != null) {
+        const countPart = String(job.current) + "/" + String(job.total);
+        meta = meta ? (meta + " (" + countPart + ")") : ("Progress: " + countPart);
+      }
+      if (!meta) {
+        meta = isFinalizing
+          ? "Weights are loaded. Finalizing model setup. This can take extra time for large models."
+          : (fallbackMeta || "Loading model into memory. This can take a while for larger models.");
+      }
+
+      const startedAt = Number(job.started_at || 0);
+      if (startedAt > 0 && (job.status === "loading" || job.status === "queued")) {
+        const elapsedSec = Math.max(0, Math.floor((Date.now() / 1000) - startedAt));
+        if (elapsedSec >= 10) {
+          meta += " | Elapsed: " + elapsedSec + "s";
+        }
+      }
+
+      if (stalled && stallSeconds > 0) {
+        meta += " | No new loader output for " + stallSeconds + "s";
+        if (stallSeconds >= 120) {
+          meta += " | If this does not move, use Stop Load and retry.";
+        }
+      }
+
+      setModelLoadProgress(pct, statusText, meta);
+    }
+
+    async function pollModelLoadJob(jobId, fallbackMeta = "") {
+      activeModelLoadJobId = jobId;
+      while (activeModelLoadJobId === jobId) {
+        const job = await apiJson("/load/" + encodeURIComponent(jobId));
+        applyModelLoadJobProgress(job, fallbackMeta);
+
+        if (job.status === "completed") {
+          finishModelLoadProgress(true, job.message || "Model is ready.");
+          setSettingsStatus(job.result || job);
+          const result = job.result || {};
+          pushNotification("Model loaded: " + (result.model_source || result.model_id || "configured source"), "success");
+          await refreshStatus();
+          return result;
+        }
+
+        if (job.status === "failed") {
+          const msg = String(job.error || job.message || "Model load failed");
+          finishModelLoadProgress(false, msg);
+          setSettingsStatus(job);
+          const err = new Error(msg);
+          err.status = 500;
+          err.payload = job;
+          throw err;
+        }
+
+
+        if (job.status === "canceled") {
+          const msg = String(job.message || "Model load canceled by user.");
+          finishModelLoadProgress(false, msg);
+          setSettingsStatus(job);
+          pushNotification(msg, "info");
+          await refreshStatus();
+          return null;
+        }
+
+        const pollDelayMs = (job.stage === "finalizing" || job.stalled) ? 1500 : 700;
+        await sleep(pollDelayMs);
+      }
+
+      throw new Error("Model load tracking stopped.");
+    }
+
+    async function stopModelLoad() {
+      let jobId = activeModelLoadJobId;
+      if (!jobId) {
+        const active = await apiJson("/load/active");
+        jobId = active && active.job_id ? String(active.job_id) : "";
+      }
+      if (!jobId) {
+        setSettingsStatus({ status: "idle", stopped: false, message: "No active model load to stop." });
+        return;
+      }
+      const data = await apiJson("/load/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: jobId }),
+      });
+      setSettingsStatus(data);
+      if (data && data.stopped) {
+        pushNotification("Model load cancellation requested.", "info");
+      }
+    }
+
+    async function resumeActiveModelLoad() {
+      if (isModelLoading || activeModelLoadJobId) {
+        return;
+      }
+      const active = await apiJson("/load/active");
+      if (!active || !active.job_id) {
+        return;
+      }
+      startModelLoadProgress(active.message || "Resuming active model load...");
+      try {
+        await pollModelLoadJob(active.job_id, active.message || "");
+      } catch (err) {
+        finishModelLoadProgress(false, String(err));
+      }
+    }
+
+    async function executeLoadWithProgress(payload, metaText = "") {
+      startModelLoadProgress(metaText);
+      try {
+        const started = await apiJson("/load/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const jobId = started && started.job_id ? String(started.job_id) : "";
+        if (!jobId) {
+          throw new Error("Model load did not return a job id.");
+        }
+        return await pollModelLoadJob(jobId, metaText);
+      } catch (err) {
+        finishModelLoadProgress(false, String(err));
+        throw err;
+      }
+    }
+
+    async function loadModel() {
+      const payload = {
+        model_id: document.getElementById("modelId").value || null,
+        model_path: document.getElementById("modelPath").value || null,
+        model_base_dir: document.getElementById("modelBaseDir").value || null,
+        device: document.getElementById("device").value || null,
+        force_reload: false,
+        persist_env: document.getElementById("persistEnv").checked
+      };
+
+      const resolved = await apiJson("/model/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (resolved.local_expected && resolved.exists === false) {
+        setSettingsStatus({
+          status: "model_not_found",
+          error: "Configured local model path does not exist.",
+          model_id: resolved.model_id || null,
+          model_source: resolved.model_source || null,
+          model_path: resolved.model_path || null,
+          model_base_dir: resolved.model_base_dir || null,
+          next_step: "Pick a valid local path or download from Hugging Face.",
+        });
+        pendingLoadPayload = payload;
+        openDownloadModal(resolved);
+        switchSettingsTab("download");
+        switchTab("settings");
+        return;
+      }
+
+      try {
+        await executeLoadWithProgress(payload, "Loading selected model and initializing tokenizer.");
+      } catch (err) {
+        const statusCode = Number(err && err.status);
+        const errText = String(err || "");
+
+        // Missing paths are already handled by /model/resolve.
+        // Avoid auto-download retries for runtime/architecture load failures.
+        setSettingsStatus({
+          status: "load_failed",
+          error: errText,
+          status_code: statusCode || null,
+          note: "Auto-download skipped because model path resolved locally before load attempt.",
+        });
+
+        if (errText.toLowerCase().includes("llama_cpp skipped")) {
+          pushNotification(
+            "Model load failed. llama.cpp fallback was skipped (missing GGUF and/or llama-cpp-python).",
+            "warning"
+          );
+        } else {
+          pushNotification("Model load failed: " + errText, "error");
+        }
+      }
+    }
+
+    async function downloadFromHF() {
+      if (activeDownloadJobId) {
+        setSettingsStatus({ status: "download_in_progress", job_id: activeDownloadJobId });
+        return;
+      }
+      const rawModelId = document.getElementById("hfModelId").value || document.getElementById("modelId").value;
+      const modelId = normalizeRepoPath(rawModelId);
+      if (!modelId) {
+        setSettingsStatus({ status: "download_failed", error: "model_id is required." });
+        return;
+      }
+      document.getElementById("hfModelId").value = modelId;
+      const compatibilityGate = await ensureHFCompatibilityBeforeDownload(
+        modelId,
+        document.getElementById("hfRevision").value || ""
+      );
+      if (!compatibilityGate.proceed) {
+        return;
+      }
+      const payload = {
+        model_id: modelId || null,
+        base_dir: document.getElementById("modelBaseDir").value || null,
+        subdir: document.getElementById("hfSubdir").value || null,
+        revision: document.getElementById("hfRevision").value || null,
+        allow_patterns: document.getElementById("hfAllowPatterns").value || null,
+        ignore_patterns: document.getElementById("hfIgnorePatterns").value || null,
+        set_as_active_model: document.getElementById("hfSetActive").checked,
+        persist_env: document.getElementById("persistEnv").checked
+      };
+      const data = await apiJson("/hf/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      setSettingsStatus(data);
+      pushNotification("Download queued: " + (data.downloaded_model_id || modelId), "info");
+      if (data.downloaded_model_id) {
+        document.getElementById("modelId").value = data.downloaded_model_id;
+      }
+      if (data.downloaded_path) {
+        document.getElementById("modelPath").value = data.downloaded_path;
+      }
+      if (data.job_id) {
+        await pollDownloadJob(data.job_id);
+      }
+    }
+
+    async function downloadFromHFModal() {
+      if (activeDownloadJobId) {
+        setSettingsStatus({ status: "download_in_progress", job_id: activeDownloadJobId });
+        return;
+      }
+      const setActive = document.getElementById("modalHfSetActive").checked;
+      const rawModelId = document.getElementById("modalHfModelId").value || document.getElementById("modelId").value || "";
+      const modalModelId = normalizeRepoPath(rawModelId);
+      if (!modalModelId) {
+        setSettingsStatus({ status: "download_failed", error: "model_id is required." });
+        return;
+      }
+      document.getElementById("modalHfModelId").value = modalModelId;
+      const modalCompatibilityGate = await ensureHFCompatibilityBeforeDownload(
+        modalModelId,
+        document.getElementById("modalHfRevision").value || ""
+      );
+      if (!modalCompatibilityGate.proceed) {
+        return;
+      }
+      const payload = {
+        model_id: modalModelId,
+        base_dir: document.getElementById("modelBaseDir").value || null,
+        subdir: document.getElementById("modalHfSubdir").value || null,
+        revision: document.getElementById("modalHfRevision").value || null,
+        allow_patterns: document.getElementById("modalHfAllowPatterns").value || null,
+        ignore_patterns: document.getElementById("modalHfIgnorePatterns").value || null,
+        set_as_active_model: setActive,
+        persist_env: document.getElementById("persistEnv").checked
+      };
+      const data = await apiJson("/hf/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      setSettingsStatus(data);
+      pushNotification("Download queued: " + (data.downloaded_model_id || payload.model_id), "info");
+      if (data.job_id) {
+        await pollDownloadJob(data.job_id, { closeModalOnComplete: true, triggerPendingLoad: setActive });
+      }
+    }
+
+    async function sendPrompt() {
+      if (isGenerating) {
+        return;
+      }
+      if (hasModelIssue) {
+        openModelIssueSettings();
+        setSettingsStatus({ status: "model_issue", detail: "Resolve model issue before sending prompts." });
+        return;
+      }
+      const prompt = String(document.getElementById("prompt").value || "");
+      const trimmedPrompt = prompt.trim();
+      if (!trimmedPrompt) {
+        return;
+      }
+      const targetConversationId = activeConversationId;
+      savePromptSettings(false);
+      const modelPrompt = buildModelPrompt(trimmedPrompt);
+      appendMessage("user", trimmedPrompt, targetConversationId);
+      document.getElementById("prompt").value = "";
+      const assistantMessageId = appendMessage("assistant", "Generating...", targetConversationId);
+
+      const requestedMaxNewTokens = Math.max(1, Number(document.getElementById("maxNewTokens").value || 4));
+      const payload = {
+        prompt: modelPrompt,
+        max_new_tokens: requestedMaxNewTokens,
+        do_sample: asBool(document.getElementById("doSample").value)
+      };
+
+      if (requestedMaxNewTokens > 16) {
+        pushNotification(
+          "High max token count (" + requestedMaxNewTokens + ") may take a while in current no-cache mode.",
+          "warning"
+        );
+      }
+
+      const controller = new AbortController();
+      activeGenerateAbortController = controller;
+      isGenerating = true;
+      setGeneratingState(true, requestedMaxNewTokens);
+
+      try {
+        const data = await apiJson("/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        updateMessageText(assistantMessageId, data.generated_text || data.text || "", targetConversationId);
+        await refreshStatus();
+      } catch (err) {
+        const aborted = (controller.signal && controller.signal.aborted) || (err && err.name === "AbortError");
+        if (aborted) {
+          updateMessageText(assistantMessageId, "Generation cancelled.", targetConversationId);
+          pushNotification("Generation cancelled.", "info");
+        } else {
+          const isNetworkErr = !!(err && (err.isNetworkError || (err.name === "TypeError" && String(err).includes("NetworkError"))));
+          if (isNetworkErr) {
+            const netMsg = "Error: Lost connection to backend. Check app.py terminal logs (possible model crash or OOM).";
+            updateMessageText(assistantMessageId, netMsg, targetConversationId);
+            pushNotification(netMsg, "error");
+          } else {
+            const errMsg = String(err);
+            updateMessageText(assistantMessageId, "Error: " + errMsg, targetConversationId);
+          }
+        }
+      } finally {
+        if (activeGenerateAbortController === controller) {
+          activeGenerateAbortController = null;
+        }
+        isGenerating = false;
+        setGeneratingState(false);
+      }
+    }
+
+    document.getElementById("downloadModal").addEventListener("click", (e) => {
+      if (e.target && e.target.id === "downloadModal") {
+        closeDownloadModal();
+      }
+    });
+    document.getElementById("prompt").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendPrompt();
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        closeDownloadModal();
+      }
+    });
+
+    initTheme();
+    loadConversationsState();
+    loadNotificationsState();
+    renderConversationList();
+    renderMessages();
+    renderNotifications();
+    loadPromptSettings();
+    renderHFCompatibility(null);
+    document.getElementById("maxNewTokens").addEventListener("change", () => savePromptSettings(false));
+    document.getElementById("doSample").addEventListener("change", () => savePromptSettings(false));
+    document.getElementById("historyTurns").addEventListener("change", () => savePromptSettings(false));
+    document.getElementById("systemContext").addEventListener("change", () => savePromptSettings(false));
+    switchTab("chat");
+    switchSettingsTab("config");
+    initDownloadState();
+    resumeActiveModelLoad().catch((err) => setSettingsStatus({ error: String(err) }));
+    refreshStatus().catch((err) => setSettingsStatus({ error: String(err) }));
+    updateTopbarTitle();
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

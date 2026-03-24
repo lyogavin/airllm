@@ -1,5 +1,6 @@
 
 from typing import List, Optional, Tuple, Union
+import os
 from tqdm import tqdm
 from pathlib import Path
 import time
@@ -15,7 +16,12 @@ from transformers.quantizers import AutoHfQuantizer, HfQuantizer
 
 from .profiler import LayeredProfiler
 
-from optimum.bettertransformer import BetterTransformer
+try:
+    from optimum.bettertransformer import BetterTransformer
+    bettertransformer_installed = True
+except ImportError:
+    BetterTransformer = None
+    bettertransformer_installed = False
 
 from .utils import clean_memory, load_layer, \
     find_or_create_local_splitted_path
@@ -44,6 +50,14 @@ except ImportError:
 
 
 class AirLLMBaseModel(GenerationMixin):
+    # Required by newer transformers GenerationMixin classmethods (>=4.5x).
+    _is_stateful = False
+    # AirLLM currently does not support the new cache classes.
+    _supports_cache_class = False
+
+    @classmethod
+    def _supports_default_dynamic_cache(cls) -> bool:
+        return False
 
     # customize layer names here
     def set_layer_names_dict(self):
@@ -145,6 +159,8 @@ class AirLLMBaseModel(GenerationMixin):
         self.max_seq_len = max_seq_len
 
         self.main_input_name = "input_ids"
+        self._position_embedding_fallback_warned = False
+        self.show_layer_progress = str(os.getenv('AIRLLM_SHOW_LAYER_PROGRESS', '0')).lower() in ('1', 'true', 'yes', 'on')
 
         # model weights prefetch cuda stream
         self.prefetching = prefetching
@@ -185,14 +201,17 @@ class AirLLMBaseModel(GenerationMixin):
         self.model = None
 
         if self.get_use_better_transformer():
-            try:
-                with init_empty_weights():
-                    self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
-                    self.model = BetterTransformer.transform(self.model)  # enable flash attention
-            except ValueError as ve:
-                del self.model
-                clean_memory()
-                self.model = None
+            if bettertransformer_installed:
+                try:
+                    with init_empty_weights():
+                        self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
+                        self.model = BetterTransformer.transform(self.model)  # enable flash attention
+                except ValueError as ve:
+                    del self.model
+                    clean_memory()
+                    self.model = None
+            else:
+                print("optimum.bettertransformer not available, fallback to standard attention path.")
 
             if self.model is None:
                 # try way 2.
@@ -331,15 +350,20 @@ class AirLLMBaseModel(GenerationMixin):
     ):
         if past_key_values is not None:
             past_length = self.get_past_key_values_cache_seq_len(past_key_values) #[0][0].shape[2]
+            if past_length <= 0:
+                past_key_values = None
 
             # Some generation methods already pass only the last input ID
-            if input_ids.shape[1] > past_length:
+            if past_key_values is not None and input_ids.shape[1] > past_length:
                 remove_prefix_length = past_length
-            else:
+            elif past_key_values is not None:
                 # Default to old behavior: keep only final ID
                 remove_prefix_length = input_ids.shape[1] - 1
+            else:
+                remove_prefix_length = 0
 
-            input_ids = input_ids[:, remove_prefix_length:]
+            if remove_prefix_length > 0:
+                input_ids = input_ids[:, remove_prefix_length:]
 
         position_ids = kwargs.get("position_ids", None)
         if attention_mask is not None and position_ids is None:
@@ -369,12 +393,117 @@ class AirLLMBaseModel(GenerationMixin):
         return self.forward(*args, **kwargs)
 
     def get_past_key_values_cache_seq_len(self, past_key_values):
-        return past_key_values[0][0].shape[2]
+        if past_key_values is None:
+            return 0
+        if hasattr(past_key_values, "get_seq_length"):
+            try:
+                seq_len = past_key_values.get_seq_length()
+                return int(seq_len or 0)
+            except Exception:
+                return 0
+        try:
+            first_key = past_key_values[0][0]
+        except Exception:
+            return 0
+        if first_key is None or not hasattr(first_key, "shape"):
+            return 0
+        if len(first_key.shape) < 3:
+            return 0
+        return int(first_key.shape[2])
     def get_sequence_len(self, seq):
         return seq.shape[1]
 
     def get_pos_emb_args(self, len_p, len_s):
         return {}
+
+    def _build_position_embeddings_for_layer(self, layer, seq, position_ids):
+        if position_ids is None:
+            return None
+        last_error = None
+        try:
+            base_model = getattr(self.model, "model", None)
+            rotary_emb = getattr(base_model, "rotary_emb", None)
+            if rotary_emb is not None:
+                return rotary_emb(seq, position_ids)
+        except Exception as exc:
+            last_error = exc
+        try:
+            self_attn = getattr(layer, "self_attn", None)
+            rotary_emb = getattr(self_attn, "rotary_emb", None)
+            if rotary_emb is not None:
+                return rotary_emb(seq, position_ids)
+        except Exception as exc:
+            last_error = exc
+
+        fallback = self._build_manual_position_embeddings(layer, seq, position_ids)
+        if fallback is not None:
+            if last_error is not None and not self._position_embedding_fallback_warned:
+                print(
+                    f"warning: rotary embedding path failed ({last_error}); "
+                    "using manual cosine/sine position embeddings fallback."
+                )
+                self._position_embedding_fallback_warned = True
+            return fallback
+
+        return None
+
+    def _build_manual_position_embeddings(self, layer, seq, position_ids):
+        try:
+            self_attn = getattr(layer, "self_attn", None)
+            head_dim = getattr(self_attn, "head_dim", None)
+            if head_dim is None:
+                num_heads = getattr(self_attn, "num_heads", None) or getattr(self.config, "num_attention_heads", None)
+                if not num_heads:
+                    return None
+                head_dim = int(seq.shape[-1]) // int(num_heads)
+            head_dim = int(head_dim)
+            if head_dim <= 0:
+                return None
+
+            rotary_dim = head_dim
+            if rotary_dim % 2 != 0:
+                rotary_dim -= 1
+            if rotary_dim <= 0:
+                return None
+
+            device = seq.device
+            compute_dtype = torch.float32
+            rope_theta = float(getattr(self.config, "rope_theta", 10000.0))
+            half_dim = rotary_dim // 2
+            inv_freq = 1.0 / (
+                rope_theta
+                ** (
+                    torch.arange(0, half_dim, device=device, dtype=compute_dtype)
+                    / float(half_dim)
+                )
+            )
+
+            pos = position_ids.to(device=device, dtype=compute_dtype)
+            freqs = torch.einsum("bs,d->bsd", pos, inv_freq)
+            emb = torch.cat((freqs, freqs), dim=-1)
+            cos = emb.cos().to(dtype=seq.dtype)
+            sin = emb.sin().to(dtype=seq.dtype)
+            return cos, sin
+        except Exception:
+            return None
+
+    def _augment_positional_args(self, layer, seq, full_position_ids, len_p, len_s):
+        pos_embed_args = self.get_pos_emb_args(len_p, len_s)
+        if not isinstance(pos_embed_args, dict):
+            pos_embed_args = {}
+        if "position_embeddings" in pos_embed_args:
+            return pos_embed_args
+        try:
+            position_ids_args = self.get_position_ids_args(full_position_ids, len_p, len_s)
+        except Exception:
+            position_ids_args = {}
+        position_ids = position_ids_args.get("position_ids") if isinstance(position_ids_args, dict) else None
+        if position_ids is None:
+            return pos_embed_args
+        position_embeddings = self._build_position_embeddings_for_layer(layer, seq, position_ids)
+        if position_embeddings is None:
+            return pos_embed_args
+        return {**pos_embed_args, "position_embeddings": position_embeddings}
 
     def get_past_key_value_args(self, k_cache, v_cache):
         return {'past_key_value': (k_cache, v_cache)}
@@ -406,10 +535,10 @@ class AirLLMBaseModel(GenerationMixin):
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-
-        if cache_utils_installed:
-            # we don't support kv cache for new version yet
-            use_cache = False
+        # AirLLM does not currently support stable incremental KV cache behavior
+        # across modern transformers versions. Force no-cache generation path.
+        use_cache = False
+        past_key_values = None
 
         if self.profiling_mode:
             self.profiler.clear_profiling_time()
@@ -417,10 +546,10 @@ class AirLLMBaseModel(GenerationMixin):
             forward_start = time.process_time()
             forward_start_wall = time.time()
 
-        # Reboot the model to make sure buffers are loaded and memory is clean
-        del self.model
-        clean_memory()
-        self.init_model()
+        # Keep the initialized meta-model between forward calls. Reinitializing
+        # on every token causes repeated full rebuilds during generation.
+        if self.model is None:
+            self.init_model()
 
         batch = [input_ids_unit.to(self.running_device).unsqueeze(0) for input_ids_unit in input_ids]
         n_seq = len(batch[0])
@@ -449,7 +578,9 @@ class AirLLMBaseModel(GenerationMixin):
 
             for i, (layer_name, layer) in tqdm(enumerate(zip(self.layer_names, self.layers)),
                                                desc=f'running layers({self.running_device})',
-                                               total=len(self.layers)):
+                                               total=len(self.layers),
+                                               disable=not self.show_layer_progress,
+                                               leave=False):
 
                 if self.prefetching:
                     if self.profiling_mode:
@@ -527,7 +658,7 @@ class AirLLMBaseModel(GenerationMixin):
                             kwargs = {'use_cache':True,
                                       }
 
-                            pos_embed_args = self.get_pos_emb_args(len_p, len_s)
+                            pos_embed_args = self._augment_positional_args(layer, seq, position_ids, len_p, len_s)
                             kwargs = {**kwargs, **past_key_value_args, **pos_embed_args, **attention_mask_args,
                                       **position_ids_args}
 
@@ -551,7 +682,7 @@ class AirLLMBaseModel(GenerationMixin):
 
 
 
-                            pos_embed_args = self.get_pos_emb_args(0, len_seq)
+                            pos_embed_args = self._augment_positional_args(layer, seq, position_ids, 0, len_seq)
                             attention_mask_args = self.get_attention_mask_args(attention_mask, 0, len_seq)
                             position_ids_args = self.get_position_ids_args(position_ids, 0, len_seq)
 
@@ -566,7 +697,8 @@ class AirLLMBaseModel(GenerationMixin):
                                 kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
 
 
-                                new_seq = layer(seq, **kwargs)[0]
+                                layer_out = layer(seq, **kwargs)
+                                new_seq = layer_out[0] if isinstance(layer_out, tuple) else layer_out
                             else:
 
                                 kwargs = {'use_cache': True,
@@ -641,3 +773,6 @@ class AirLLMBaseModel(GenerationMixin):
             hidden_states=tuple(all_hidden_states) if all_hidden_states is not None else None,
             attentions=tuple(all_self_attns) if all_hidden_states is not None else None,
         )
+
+
+
