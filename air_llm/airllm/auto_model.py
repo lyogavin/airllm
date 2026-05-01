@@ -24,24 +24,35 @@ class AutoModel:
         else:
             config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True)
 
-        if "Qwen2ForCausalLM" in config.architectures[0]:
+        architecture = config.architectures[0] if getattr(config, "architectures", None) else ""
+        model_type = getattr(config, "model_type", "")
+        text_config = getattr(config, "text_config", None)
+        text_model_type = getattr(text_config, "model_type", "")
+
+        if (
+            "Qwen3_5" in architecture
+            or model_type == "qwen3_5"
+            or text_model_type == "qwen3_5_text"
+        ):
+            return "airllm", "AirLLMQWen3_5"
+        elif "Qwen2ForCausalLM" in architecture:
             return "airllm", "AirLLMQWen2"
-        elif "QWen" in config.architectures[0]:
+        elif "QWen" in architecture:
             return "airllm", "AirLLMQWen"
-        elif "Baichuan" in config.architectures[0]:
+        elif "Baichuan" in architecture:
             return "airllm", "AirLLMBaichuan"
-        elif "ChatGLM" in config.architectures[0]:
+        elif "ChatGLM" in architecture:
             return "airllm", "AirLLMChatGLM"
-        elif "InternLM" in config.architectures[0]:
+        elif "InternLM" in architecture:
             return "airllm", "AirLLMInternLM"
-        elif "Mistral" in config.architectures[0]:
+        elif "Mistral" in architecture:
             return "airllm", "AirLLMMistral"
-        elif "Mixtral" in config.architectures[0]:
+        elif "Mixtral" in architecture:
             return "airllm", "AirLLMMixtral"
-        elif "Llama" in config.architectures[0]:
+        elif "Llama" in architecture:
             return "airllm", "AirLLMLlama2"
         else:
-            print(f"unknown artichitecture: {config.architectures[0]}, try to use Llama2...")
+            print(f"unknown artichitecture: {architecture}, try to use Llama2...")
             return "airllm", "AirLLMLlama2"
 
     @classmethod
