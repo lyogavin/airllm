@@ -205,14 +205,43 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
 
     safetensors_format = False
+    # if no index file is present, the repo may be a single-file model — try to
+    # fetch the single weight file on demand (the upstream snapshot_download
+    # excludes *.safetensors / *.bin)
+    if not (os.path.exists(checkpoint_path / 'pytorch_model.bin.index.json')
+            or os.path.exists(checkpoint_path / 'model.safetensors.index.json')):
+        if repo_id is not None:
+            for _fname in ('model.safetensors', 'pytorch_model.bin'):
+                if not os.path.exists(checkpoint_path / _fname):
+                    try:
+                        huggingface_hub.hf_hub_download(repo_id, _fname, token=hf_token)
+                    except Exception:
+                        pass
+
     if os.path.exists(checkpoint_path / 'pytorch_model.bin.index.json'):
         with open(checkpoint_path / 'pytorch_model.bin.index.json', 'rb') as f:
             index = json.load(f)['weight_map']
-    else:
+    elif os.path.exists(checkpoint_path / 'model.safetensors.index.json'):
         safetensors_format = True
-        assert os.path.exists(checkpoint_path / 'model.safetensors.index.json'), f'model.safetensors.index.json should exist.'
         with open(checkpoint_path / 'model.safetensors.index.json', 'rb') as f:
             index = json.load(f)['weight_map']
+    elif os.path.exists(checkpoint_path / 'model.safetensors'):
+        # single-file safetensors — synthesize an index pointing every key to the one file
+        safetensors_format = True
+        from safetensors import safe_open
+        with safe_open(str(checkpoint_path / 'model.safetensors'), framework='pt') as f:
+            index = {k: 'model.safetensors' for k in f.keys()}
+    elif os.path.exists(checkpoint_path / 'pytorch_model.bin'):
+        # single-file pytorch pickle — synthesize index
+        safetensors_format = False
+        sd = torch.load(checkpoint_path / 'pytorch_model.bin', map_location='cpu')
+        index = {k: 'pytorch_model.bin' for k in sd.keys()}
+        del sd
+    else:
+        raise FileNotFoundError(
+            f"No weight files found in {checkpoint_path}. Expected one of: "
+            f"pytorch_model.bin[.index.json], model.safetensors[.index.json]."
+        )
 
     if layer_names is None:
         n_layers = len(set([int(k.split('.')[2]) for k in index.keys() if 'model.layers' in k]))

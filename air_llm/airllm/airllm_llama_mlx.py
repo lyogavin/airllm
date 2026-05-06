@@ -210,7 +210,7 @@ class AirLLMLlamaMlx:
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
                  hf_token=None, prefetching=True, test_nonlayered=False, show_memory_util=False,
-                 delete_original=False):
+                 delete_original=False, reuse_modules=True):
 
         self.hf_token = hf_token
         self.set_layer_names_dict()
@@ -218,6 +218,10 @@ class AirLLMLlamaMlx:
         self.show_memory_util = show_memory_util
         self.least_available = None
         self.initial_available = psutil.virtual_memory().available / 1024 / 1024
+        # When True, allocate one TransformerBlock/Embedding/RMSNorm/Linear instance up-front
+        # and just .update() weights into it per layer. Skips ~66 Python instantiations per
+        # 3-token gen on a 22-layer model. See projects/kir-airllm/03-real-numbers.
+        self.reuse_modules = reuse_modules and not test_nonlayered
 
 
 
@@ -240,6 +244,12 @@ class AirLLMLlamaMlx:
                            [self.layer_names_dict['norm'], self.layer_names_dict['lm_head']]
 
         self.tokenizer = self.get_tokenizer(hf_token=hf_token)
+
+        if self.reuse_modules:
+            self._block = TransformerBlock(args=self.model_args)
+            self._embed = nn.Embedding(self.model_args.vocab_size, self.model_args.dim)
+            self._norm_mod = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
+            self._output_mod = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
 
 
     def get_tokenizer(self, hf_token=None):
@@ -273,37 +283,38 @@ class AirLLMLlamaMlx:
         # save the caches in cache
 
         self.record_memory('before_tok_embeddings')
-        self.tok_embeddings = nn.Embedding(self.model_args.vocab_size, self.model_args.dim)
-        #w0 = self.tok_embeddings.weight[0][0]
-        mask = mask.astype(self.tok_embeddings.weight.dtype)
+        if self.reuse_modules:
+            embed_mod = self._embed
+        else:
+            embed_mod = nn.Embedding(self.model_args.vocab_size, self.model_args.dim)
+        mask = mask.astype(embed_mod.weight.dtype)
 
         self.record_memory('before_loading_tok')
         update_weights = ModelPersister.get_model_persister().load_model(self.layer_names_dict['embed'], self.checkpoint_path)
 
         self.record_memory('after_loading_tok')
-        self.tok_embeddings.update(update_weights['tok_embeddings'])
-        #w1 = self.tok_embeddings.weight[0][0]
+        embed_mod.update(update_weights['tok_embeddings'])
 
-        #assert w0 != w1, f"weight should change after updates, weights: {update_weights}"
-
-        x = self.tok_embeddings(x)
+        x = embed_mod(x)
         # force execution
         mx.eval(x)
 
-        if not self.test_nonlayered:
-
-            del self.tok_embeddings
-            gc.collect()
-        else:
+        if self.test_nonlayered:
             print(f"self.test_nonlayered:{self.test_nonlayered}, save layers")
             self.layers = []
+            self.tok_embeddings = embed_mod
+        elif not self.reuse_modules:
+            del embed_mod
+            gc.collect()
 
         self.record_memory('after_tok_embeddings')
-        #for l in self.layers:
 
         for il in tqdm(range(self.model_args.n_layers), desc='running layers'):
             self.record_memory(f'before layer {il}')
-            l = TransformerBlock(args=self.model_args)
+            if self.reuse_modules:
+                l = self._block
+            else:
+                l = TransformerBlock(args=self.model_args)
             l.update(
                 ModelPersister.get_model_persister().load_model(f'{self.layer_names_dict["layer_prefix"]}.{il}',
                                                                      self.checkpoint_path)['layers'][il]
@@ -315,38 +326,48 @@ class AirLLMLlamaMlx:
             # We store the per layer cache in a simple python list
             cache.append(c)
 
-            if not self.test_nonlayered:
+            if self.test_nonlayered:
+                self.layers.append(l)
+            elif not self.reuse_modules:
                 del l
                 gc.collect()
-            else:
-                self.layers.append(l)
             self.record_memory(f'after layer {il}')
 
         self.record_memory('before_norm')
-        self.norm = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
-        self.norm.update(
+        if self.reuse_modules:
+            norm_mod = self._norm_mod
+        else:
+            norm_mod = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
+        norm_mod.update(
             ModelPersister.get_model_persister().load_model(self.layer_names_dict['norm'], self.checkpoint_path)['norm']
         )
-        x = self.norm(x)
+        x = norm_mod(x)
         # force execution
         mx.eval(x)
-        if not self.test_nonlayered:
-            del self.norm
+        if self.test_nonlayered:
+            self.norm = norm_mod
+        elif not self.reuse_modules:
+            del norm_mod
             gc.collect()
         self.record_memory('after_norm')
 
         # We only care about the last logits that generate the next token
         self.record_memory('before_lmhead')
-        self.output = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
-        self.output.update(
+        if self.reuse_modules:
+            output_mod = self._output_mod
+        else:
+            output_mod = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
+        output_mod.update(
             ModelPersister.get_model_persister().load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output']
         )
-        y = self.output(x[:, -1])
+        y = output_mod(x[:, -1])
         # force execution
         mx.eval(y)
 
-        if not self.test_nonlayered:
-            del self.output
+        if self.test_nonlayered:
+            self.output = output_mod
+        elif not self.reuse_modules:
+            del output_mod
             gc.collect()
         self.record_memory('after_lmhead')
         y = sample(y)
@@ -369,68 +390,81 @@ class AirLLMLlamaMlx:
             # dimension of 1
             x = y[:, None]
 
-            if not self.test_nonlayered:
-                self.record_memory('before_tok_embeddings')
-                self.tok_embeddings = nn.Embedding(self.model_args.vocab_size, self.model_args.dim)
-                #w0 = self.tok_embeddings.weight[0][0]
-                self.tok_embeddings.update(
+            self.record_memory('before_tok_embeddings')
+            if self.reuse_modules:
+                embed_mod = self._embed
+                embed_mod.update(
                     ModelPersister.get_model_persister().load_model(self.layer_names_dict['embed'], self.checkpoint_path)['tok_embeddings'])
-                #w1 = self.tok_embeddings.weight[0][0]
-
-                #assert w0 != w1, f"weight should change after updates."
-            x = self.tok_embeddings(x)
+            elif self.test_nonlayered:
+                embed_mod = self.tok_embeddings
+            else:
+                embed_mod = nn.Embedding(self.model_args.vocab_size, self.model_args.dim)
+                embed_mod.update(
+                    ModelPersister.get_model_persister().load_model(self.layer_names_dict['embed'], self.checkpoint_path)['tok_embeddings'])
+            x = embed_mod(x)
 
             # force execution
             mx.eval(x)
-            if not self.test_nonlayered:
-                del self.tok_embeddings
+            if not self.test_nonlayered and not self.reuse_modules:
+                del embed_mod
                 gc.collect()
             self.record_memory('after_tok_embeddings')
 
             for i in tqdm(range(len(cache)), desc='running layers'):
-                self.record_memory(f'before layer {il}')
-                # We are overwriting the arrays in the cache list. When
-                # the computation will happen, MLX will be discarding the
-                # old cache the moment it is not needed anymore.
+                self.record_memory(f'before layer {i}')
 
-                if not self.test_nonlayered:
+                if self.reuse_modules:
+                    l = self._block
+                    l.update(ModelPersister.get_model_persister().load_model(f'{self.layer_names_dict["layer_prefix"]}.{i}',
+                                                                             self.checkpoint_path)['layers'][i])
+                elif self.test_nonlayered:
+                    l = self.layers[i]
+                else:
                     l = TransformerBlock(args=self.model_args)
                     l.update(ModelPersister.get_model_persister().load_model(f'{self.layer_names_dict["layer_prefix"]}.{i}',
                                                                              self.checkpoint_path)['layers'][i])
-                else:
-                    l = self.layers[i]
 
                 x, cache[i] = l(x, mask=None, cache=cache[i])
                 # force execution
                 mx.eval(x)
-                if not self.test_nonlayered:
+                if not self.test_nonlayered and not self.reuse_modules:
                     del l
                     gc.collect()
-                self.record_memory(f'after layer {il}')
+                self.record_memory(f'after layer {i}')
 
             self.record_memory('before_norm')
-            if not self.test_nonlayered:
-                self.norm = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
-                self.norm.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['norm'], self.checkpoint_path)['norm'])
-            x = self.norm(x)
+            if self.reuse_modules:
+                norm_mod = self._norm_mod
+                norm_mod.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['norm'], self.checkpoint_path)['norm'])
+            elif self.test_nonlayered:
+                norm_mod = self.norm
+            else:
+                norm_mod = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
+                norm_mod.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['norm'], self.checkpoint_path)['norm'])
+            x = norm_mod(x)
             # force execution
             mx.eval(x)
 
-            if not self.test_nonlayered:
-                del self.norm
+            if not self.test_nonlayered and not self.reuse_modules:
+                del norm_mod
                 gc.collect()
 
             self.record_memory('after_norm')
 
-            if not self.test_nonlayered:
-                self.output = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
-                self.output.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output'])
-            y = sample(self.output(x[:, -1]))
+            if self.reuse_modules:
+                output_mod = self._output_mod
+                output_mod.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output'])
+            elif self.test_nonlayered:
+                output_mod = self.output
+            else:
+                output_mod = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
+                output_mod.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output'])
+            y = sample(output_mod(x[:, -1]))
 
             # force execution
             mx.eval(y)
-            if not self.test_nonlayered:
-                del self.output
+            if not self.test_nonlayered and not self.reuse_modules:
+                del output_mod
                 gc.collect()
 
             self.record_memory('after_lmhead')
