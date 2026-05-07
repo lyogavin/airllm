@@ -22,13 +22,14 @@ mp.load_model = timed_load
 MODEL = sys.argv[1] if len(sys.argv) > 1 else "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 MAX_NEW = int(sys.argv[2]) if len(sys.argv) > 2 else 3
 
-def run(label, reuse_modules):
-    print(f"\n========== RUN: {label}  reuse_modules={reuse_modules} ==========")
+def run(label, reuse_modules, compile_block=False):
+    print(f"\n========== RUN: {label}  reuse_modules={reuse_modules}  compile_block={compile_block} ==========")
     load_timings.clear()
     gc.collect()
 
     t0 = time.perf_counter()
-    model = AirLLMLlamaMlx(MODEL, show_memory_util=False, reuse_modules=reuse_modules)
+    model = AirLLMLlamaMlx(MODEL, show_memory_util=False,
+                            reuse_modules=reuse_modules, compile_block=compile_block)
     t_init = time.perf_counter() - t0
     print(f"[init]  from_pretrained: {t_init:6.2f}s   "
           f"(n_layers={model.model_args.n_layers} dim={model.model_args.dim})")
@@ -65,13 +66,15 @@ def run(label, reuse_modules):
     return t_init, t_gen, total_load
 
 print(f"=== model: {MODEL}, max_new_tokens={MAX_NEW} ===")
-# Run baseline first then optimization (so prefetch/warm caches don't bias)
+# Run baseline first then progressively-optimized variants
 t1_init, t1_gen, t1_disk = run("BASELINE", reuse_modules=False)
 t2_init, t2_gen, t2_disk = run("REUSE_MODULES", reuse_modules=True)
+t3_init, t3_gen, t3_disk = run("REUSE+COMPILE", reuse_modules=True, compile_block=True)
 
-print("\n========== A/B SUMMARY ==========")
-print(f"               baseline    reuse        delta")
-print(f"  init:        {t1_init:7.2f}s   {t2_init:7.2f}s   {t2_init - t1_init:+.2f}s")
-print(f"  gen total:   {t1_gen:7.2f}s   {t2_gen:7.2f}s   {(t2_gen-t1_gen)/t1_gen*100:+.1f}%")
-print(f"  gen/token:   {t1_gen/MAX_NEW:7.3f}s   {t2_gen/MAX_NEW:7.3f}s")
-print(f"  disk gen:    {t1_disk:7.2f}s   {t2_disk:7.2f}s")
+print("\n========== A/B/C SUMMARY ==========")
+print(f"               baseline       reuse       reuse+compile")
+print(f"  gen total:   {t1_gen:7.2f}s     {t2_gen:7.2f}s     {t3_gen:7.2f}s")
+print(f"  gen/token:   {t1_gen/MAX_NEW:7.3f}s     {t2_gen/MAX_NEW:7.3f}s     {t3_gen/MAX_NEW:7.3f}s")
+print(f"  vs baseline:                  {(t2_gen-t1_gen)/t1_gen*100:+5.1f}%        {(t3_gen-t1_gen)/t1_gen*100:+5.1f}%")
+print(f"  vs reuse:                                   {(t3_gen-t2_gen)/t2_gen*100:+5.1f}%")
+print(f"  disk gen:    {t1_disk:7.2f}s     {t2_disk:7.2f}s     {t3_disk:7.2f}s")

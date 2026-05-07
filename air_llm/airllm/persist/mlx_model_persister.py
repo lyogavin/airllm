@@ -15,6 +15,12 @@ from itertools import starmap
 
 def map_torch_to_mlx(model):
 
+    # 0. drop legacy buffers that no longer exist in the MLX module tree.
+    # rotary_emb.inv_freq is a registered buffer on older transformers Llama
+    # implementations; MLX's nn.RoPE is parameter-free, so the key has nowhere
+    # to land and mlx.nn.Module.update() now raises on unknown keys.
+    model = {k: v for k, v in model.items() if "rotary_emb" not in k}
+
     # things to change
     # 1. there's no "model." in the weight names
     model = {k.replace("model.", ""): v for k, v in model.items()}

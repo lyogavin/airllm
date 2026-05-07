@@ -74,12 +74,9 @@ class RMSNorm(nn.Module):
         self.weight = mx.ones((dims,))
         self.eps = eps
 
-    def _norm(self, x):
-        return x * mx.rsqrt(x.square().mean(-1, keepdims=True) + self.eps)
-
     def __call__(self, x):
-        output = self._norm(x.astype(mx.float32)).astype(x.dtype)
-        return self.weight * output
+        # mx.fast.rms_norm: single Metal kernel, fused mean + rsqrt + scale
+        return mx.fast.rms_norm(x, self.weight, self.eps)
 
 
 class Attention(nn.Module):
@@ -108,20 +105,15 @@ class Attention(nn.Module):
         mask: Optional[mx.array] = None,
         cache: Optional[Tuple[mx.array, mx.array]] = None,
     ) -> mx.array:
-        B, L, D = x.shape
+        B, L, _ = x.shape
 
         queries, keys, values = self.wq(x), self.wk(x), self.wv(x)
 
-        # Prepare the queries, keys and values for the attention computation
+        # Reshape into [B, n_heads, L, head_dim]; mx.fast.SDPA handles GQA natively
+        # so we keep keys/values at n_kv_heads (no manual tiling).
         queries = queries.reshape(B, L, self.n_heads, -1).transpose(0, 2, 1, 3)
         keys = keys.reshape(B, L, self.n_kv_heads, -1).transpose(0, 2, 1, 3)
         values = values.reshape(B, L, self.n_kv_heads, -1).transpose(0, 2, 1, 3)
-
-        def repeat(a):
-            a = mx.concatenate([mx.expand_dims(a, 2)] * self.repeats, axis=2)
-            return a.reshape([B, self.n_heads, L, -1])
-
-        keys, values = map(repeat, (keys, values))
 
         if cache is not None:
             key_cache, value_cache = cache
@@ -129,15 +121,20 @@ class Attention(nn.Module):
             keys = self.rope(keys, offset=key_cache.shape[2])
             keys = mx.concatenate([key_cache, keys], axis=2)
             values = mx.concatenate([value_cache, values], axis=2)
+            # Single-token gen step: causal mask is degenerate (q sees all of k),
+            # so no mask needed.
+            sdpa_mask = None
         else:
             queries = self.rope(queries)
             keys = self.rope(keys)
+            # Prompt-pass: native causal string is faster than a built additive mask.
+            sdpa_mask = "causal"
 
-        scores = (queries * self.scale) @ keys.transpose(0, 1, 3, 2)
-        if mask is not None:
-            scores += mask
-        scores = mx.softmax(scores.astype(mx.float32), axis=-1).astype(scores.dtype)
-        output = (scores @ values).transpose(0, 2, 1, 3).reshape(B, L, -1)
+        # Fused MHA/GQA — replaces manual matmul + softmax + matmul chain.
+        output = mx.fast.scaled_dot_product_attention(
+            queries, keys, values, scale=self.scale, mask=sdpa_mask
+        )
+        output = output.transpose(0, 2, 1, 3).reshape(B, L, -1)
         return self.wo(output), (keys, values)
 
 
@@ -182,6 +179,61 @@ def sample(logits, temperature=0):
     else:
         return mx.random.categorical(logits * (1 / temperature))
 
+
+def block_forward_fn(
+    x, use_causal_mask, cache_k, cache_v, has_cache,
+    attn_norm_w, ffn_norm_w,
+    wq_w, wk_w, wv_w, wo_w,
+    w1_w, w2_w, w3_w,
+    n_heads, n_kv_heads, head_dim, scale, rope_theta, rope_traditional, norm_eps,
+):
+    """Pure functional TransformerBlock forward, built on Metal-fused primitives:
+      - mx.fast.rms_norm  (single-kernel RMSNorm)
+      - mx.fast.rope       (single-kernel RoPE with offset)
+      - mx.fast.scaled_dot_product_attention  (fused MHA/GQA, native causal)
+    Weights as explicit args so mx.compile traces by shape, not by closure refs."""
+    B, L, _ = x.shape
+
+    # pre-attn RMSNorm (fused)
+    h_norm = mx.fast.rms_norm(x, attn_norm_w, norm_eps)
+
+    # QKV projections
+    q = h_norm @ wq_w.T
+    k = h_norm @ wk_w.T
+    v = h_norm @ wv_w.T
+
+    q = q.reshape(B, L, n_heads, head_dim).transpose(0, 2, 1, 3)
+    k = k.reshape(B, L, n_kv_heads, head_dim).transpose(0, 2, 1, 3)
+    v = v.reshape(B, L, n_kv_heads, head_dim).transpose(0, 2, 1, 3)
+
+    # RoPE (fused, with offset)
+    if has_cache:
+        offset = cache_k.shape[2]
+        q = mx.fast.rope(q, head_dim, traditional=rope_traditional, base=rope_theta, scale=1.0, offset=offset)
+        k = mx.fast.rope(k, head_dim, traditional=rope_traditional, base=rope_theta, scale=1.0, offset=offset)
+        k = mx.concatenate([cache_k, k], axis=2)
+        v = mx.concatenate([cache_v, v], axis=2)
+    else:
+        q = mx.fast.rope(q, head_dim, traditional=rope_traditional, base=rope_theta, scale=1.0, offset=0)
+        k = mx.fast.rope(k, head_dim, traditional=rope_traditional, base=rope_theta, scale=1.0, offset=0)
+
+    # attention (fused; native GQA — no need to tile k,v)
+    sdpa_mask = "causal" if use_causal_mask else None
+    attn_out = mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask=sdpa_mask)
+    attn_out = attn_out.transpose(0, 2, 1, 3).reshape(B, L, -1)
+    attn_out = attn_out @ wo_w.T
+
+    h = x + attn_out
+
+    # FFN block
+    h_norm2 = mx.fast.rms_norm(h, ffn_norm_w, norm_eps)
+    gate = nn.silu(h_norm2 @ w1_w.T)
+    up = h_norm2 @ w3_w.T
+    ffn_out = (gate * up) @ w2_w.T
+
+    out = h + ffn_out
+    return out, k, v
+
 class AirLLMLlamaMlx:
 
     # customize layer names here
@@ -210,7 +262,7 @@ class AirLLMLlamaMlx:
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
                  hf_token=None, prefetching=True, test_nonlayered=False, show_memory_util=False,
-                 delete_original=False, reuse_modules=True):
+                 delete_original=False, reuse_modules=True, compile_block=False):
 
         self.hf_token = hf_token
         self.set_layer_names_dict()
@@ -251,12 +303,52 @@ class AirLLMLlamaMlx:
             self._norm_mod = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
             self._output_mod = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
 
+        # mx.compile a *pure functional* block forward (block_forward_fn). Weights
+        # are passed as explicit args, so the compiled graph doesn't capture stale
+        # array references when self._block.update(weights) swaps in new weights.
+        # The naive `mx.compile(self._block.__call__)` produced gibberish output —
+        # MLX baked random-init weight refs into the trace.
+        self.compile_block = compile_block and self.reuse_modules
+        if self.compile_block:
+            self._compiled_block_fn = mx.compile(block_forward_fn)
+            # cache constant ints/floats once
+            self._n_heads = self.model_args.n_heads
+            self._n_kv_heads = self.model_args.n_kv_heads
+            self._head_dim = self.model_args.head_dim
+            self._scale = self.model_args.head_dim ** -0.5
+            self._rope_theta = self.model_args.rope_theta
+            self._rope_traditional = self.model_args.rope_traditional
+            self._repeats = self._n_heads // self._n_kv_heads
+            self._norm_eps = self.model_args.norm_eps
+        else:
+            self._compiled_block_fn = None
+
 
     def get_tokenizer(self, hf_token=None):
         if hf_token is not None:
             return AutoTokenizer.from_pretrained(self.model_local_path, token=hf_token, trust_remote_code=True)
         else:
             return AutoTokenizer.from_pretrained(self.model_local_path, trust_remote_code=True)
+
+    def _call_compiled_block(self, x, use_causal_mask, cache):
+        """Extract current weights from self._block and invoke the compiled functional forward."""
+        b = self._block
+        if cache is None:
+            zero = mx.zeros((1,), dtype=x.dtype)
+            cache_k, cache_v, has_cache = zero, zero, False
+        else:
+            cache_k, cache_v = cache
+            has_cache = True
+        out, k, v = self._compiled_block_fn(
+            x, use_causal_mask, cache_k, cache_v, has_cache,
+            b.attention_norm.weight, b.ffn_norm.weight,
+            b.attention.wq.weight, b.attention.wk.weight,
+            b.attention.wv.weight, b.attention.wo.weight,
+            b.feed_forward.w1.weight, b.feed_forward.w2.weight, b.feed_forward.w3.weight,
+            self._n_heads, self._n_kv_heads, self._head_dim, self._scale,
+            self._rope_theta, self._rope_traditional, self._norm_eps,
+        )
+        return out, (k, v)
 
 
     def generate(self, x, temperature=0, max_new_tokens=None, **kwargs):
@@ -320,7 +412,10 @@ class AirLLMLlamaMlx:
                                                                      self.checkpoint_path)['layers'][il]
             )
 
-            x, c = l(x, mask=mask)
+            if self.compile_block:
+                x, c = self._call_compiled_block(x, use_causal_mask=True, cache=None)
+            else:
+                x, c = l(x, mask=mask)
             # force execution
             mx.eval(x)
             # We store the per layer cache in a simple python list
@@ -424,7 +519,10 @@ class AirLLMLlamaMlx:
                     l.update(ModelPersister.get_model_persister().load_model(f'{self.layer_names_dict["layer_prefix"]}.{i}',
                                                                              self.checkpoint_path)['layers'][i])
 
-                x, cache[i] = l(x, mask=None, cache=cache[i])
+                if self.compile_block:
+                    x, cache[i] = self._call_compiled_block(x, use_causal_mask=False, cache=cache[i])
+                else:
+                    x, cache[i] = l(x, mask=None, cache=cache[i])
                 # force execution
                 mx.eval(x)
                 if not self.test_nonlayered and not self.reuse_modules:
