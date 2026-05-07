@@ -80,16 +80,33 @@ class MlxModelPersister(ModelPersister):
 
         return safetensor_exists and done_marker_exists
 
-    def persist_model(self, state_dict, layer_name, saving_path):
-        #save_file(state_dict, saving_path / (layer_name + 'safetensors'))
-        weights = {k: v.to(torch.float16).numpy() for k, v in state_dict.items()}
-        np.savez(
-            saving_path / (layer_name + 'mlx'),
-            **weights#map_torch_to_mlx(state_dict)
-        )
+    def persist_model(self, state_dict, layer_name, saving_path, compression=None):
+        # Default: dump fp16 weights as numpy. With compression='4bit', quantize
+        # 2D Linear/Embedding weights via mx.quantize and store the (w_q, scales,
+        # biases) triplet under <key>.weight / .scales / .biases. Loaded into
+        # nn.QuantizedLinear / nn.QuantizedEmbedding by AirLLMLlamaMlx.
+        weights = {}
+        if compression == '4bit':
+            bits = 4
+            group_size = 64
+            for k, v in state_dict.items():
+                np_v = v.to(torch.float16).numpy()
+                # quantize 2D weights whose inner dim is divisible by group_size
+                if (k.endswith('.weight') and np_v.ndim == 2
+                        and np_v.shape[-1] % group_size == 0):
+                    mx_w = mx.array(np_v)
+                    w_q, scales, biases = mx.quantize(mx_w, group_size=group_size, bits=bits)
+                    base = k[:-len('.weight')]
+                    weights[k] = np.array(w_q)
+                    weights[base + '.scales'] = np.array(scales)
+                    weights[base + '.biases'] = np.array(biases)
+                else:
+                    weights[k] = np_v
+        else:
+            weights = {k: v.to(torch.float16).numpy() for k, v in state_dict.items()}
 
-        print(f"saved as: {saving_path / (layer_name + 'mlx')}")
-
+        np.savez(saving_path / (layer_name + 'mlx'), **weights)
+        print(f"saved as: {saving_path / (layer_name + 'mlx')}{' (4bit)' if compression == '4bit' else ''}")
         # set done marker
         (saving_path / (layer_name + 'mlx.done')).touch()
 

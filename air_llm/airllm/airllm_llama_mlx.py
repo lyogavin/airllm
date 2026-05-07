@@ -303,12 +303,31 @@ class AirLLMLlamaMlx:
             self._norm_mod = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
             self._output_mod = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
 
+            # Convert to quantized variants. nn.quantize walks children and
+            # swaps eligible sub-modules in-place, so it works for the block
+            # (Linear children) but is a no-op on leaf modules — for those we
+            # construct QuantizedEmbedding / QuantizedLinear directly. Real
+            # weights arrive later via .update() in model_generate().
+            if compression == '4bit':
+                nn.quantize(self._block, bits=4, group_size=64)
+                self._embed = nn.QuantizedEmbedding(
+                    self.model_args.vocab_size, self.model_args.dim,
+                    group_size=64, bits=4,
+                )
+                self._output_mod = nn.QuantizedLinear(
+                    self.model_args.dim, self.model_args.vocab_size,
+                    bias=False, group_size=64, bits=4,
+                )
+
         # mx.compile a *pure functional* block forward (block_forward_fn). Weights
         # are passed as explicit args, so the compiled graph doesn't capture stale
         # array references when self._block.update(weights) swaps in new weights.
         # The naive `mx.compile(self._block.__call__)` produced gibberish output —
         # MLX baked random-init weight refs into the trace.
-        self.compile_block = compile_block and self.reuse_modules
+        # Note: incompatible with compression='4bit' — block_forward_fn does raw
+        # matmul, but QuantizedLinear weights are q-packed uint32. Use the regular
+        # nn.Module path (reuse_modules) for 4bit; QuantizedLinear is already fast.
+        self.compile_block = compile_block and self.reuse_modules and compression != '4bit'
         if self.compile_block:
             self._compiled_block_fn = mx.compile(block_forward_fn)
             # cache constant ints/floats once

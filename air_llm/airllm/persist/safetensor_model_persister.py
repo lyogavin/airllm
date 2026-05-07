@@ -24,7 +24,9 @@ class SafetensorModelPersister(ModelPersister):
 
         return safetensor_exists and done_marker_exists
 
-    def persist_model(self, state_dict, layer_name, saving_path):
+    def persist_model(self, state_dict, layer_name, saving_path, compression=None):
+        # CUDA path: state_dict is already bnb-compressed by compress_layer_state_dict
+        # before reaching here; nothing more to do here.
         save_file(state_dict, saving_path / (layer_name + 'safetensors'))
 
         print(f"saved as: {saving_path / (layer_name + 'safetensors')}")

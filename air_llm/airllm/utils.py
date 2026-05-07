@@ -142,7 +142,15 @@ def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None
             total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
 
     if compression == '4bit':
-        total_shard_files_size_bytes = int(total_shard_files_size_bytes / 0.2813)
+        # Mac path uses mx.quantize: 4bit shards measure ~0.28× of fp16 source
+        # (TinyLlama: 590/2098 = 0.281). The original /0.2813 multiplier on the
+        # CUDA path treats this as the *required* free space and is wildly
+        # over-conservative on disk usage; keep it for bnb compatibility but use
+        # the measured ratio on Mac.
+        if is_on_mac_os:
+            total_shard_files_size_bytes = int(total_shard_files_size_bytes * 0.30)
+        else:
+            total_shard_files_size_bytes = int(total_shard_files_size_bytes / 0.2813)
     elif compression == '8bit':
         total_shard_files_size_bytes = total_shard_files_size_bytes // 2
 
@@ -155,6 +163,12 @@ def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None
                                       )
 
 def compress_layer_state_dict(layer_state_dict, compression=None):
+    # On Mac / no-bitsandbytes builds, defer compression to the persister.
+    # MlxModelPersister.persist_model handles 4bit via mx.quantize. CUDA path
+    # uses bitsandbytes nf4/blockwise here (requires .cuda() tensors).
+    if compression in ('4bit', '8bit') and not bitsandbytes_installed:
+        return layer_state_dict
+
     compressed_layer_state_dict = None
     if compression == '4bit':
         compressed_layer_state_dict = {}
@@ -192,7 +206,13 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     """
 
     if compression is not None:
-        assert bitsandbytes_installed, f"when using compression bitsandbytes has to be installed."
+        # bitsandbytes is required only for the CUDA quantization path
+        # (compress_layer_state_dict). On Mac we use mx.quantize via the MLX
+        # persister and don't need bnb.
+        if is_on_mac_os:
+            assert compression == '4bit', f"only '4bit' supported on macOS for now, got {compression!r}"
+        else:
+            assert bitsandbytes_installed, f"when using compression bitsandbytes has to be installed."
         splitted_model_dir_name = splitted_model_dir_name + "." + compression
 
     checkpoint_path = Path(checkpoint_path)
@@ -349,7 +369,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
         marker_exists = ModelPersister.get_model_persister().model_persist_exist(layer, saving_path)
         if not marker_exists:
-            ModelPersister.get_model_persister().persist_model(layer_state_dict, layer, saving_path)
+            ModelPersister.get_model_persister().persist_model(layer_state_dict, layer, saving_path, compression=compression)
 
         # Free memory
         for k in layer_state_dict.keys():
