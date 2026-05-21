@@ -300,8 +300,19 @@ class AirLLMBaseModel(GenerationMixin):
         return state_dict
 
     def move_layer_to_device(self, state_dict):
+        # Shards on disk may contain tensors the currently-installed
+        # transformers no longer exposes on the model (e.g. per-layer
+        # self_attn.rotary_emb.inv_freq was removed in transformers>=4.45
+        # in favor of a single shared LlamaModel.rotary_emb). Filter to
+        # the intersection with what the live model actually has so we
+        # don't AttributeError inside set_module_tensor_to_device.
+        known = set(dict(self.model.named_parameters()).keys())
+        known.update(name for name, _ in self.model.named_buffers())
+
         layers = []
         for param_name, param in state_dict.items():
+            if param_name not in known:
+                continue
             if self.hf_quantizer is None:
                 layers.append(param_name)
             else:
@@ -374,7 +385,30 @@ class AirLLMBaseModel(GenerationMixin):
         return seq.shape[1]
 
     def get_pos_emb_args(self, len_p, len_s):
-        return {}
+        # transformers>=4.46 moved RoPE to the model level: per-layer
+        # LlamaAttention now expects position_embeddings=(cos, sin) to be
+        # supplied by the caller. Because our per-layer loop bypasses
+        # LlamaModel.forward (which is where rotary_emb normally runs),
+        # we reconstruct it here from the model config and inject cos/sin
+        # for the current position range. Defensive: if the import or
+        # construction fails (older transformers, non-Llama family),
+        # fall through to the legacy empty-dict behavior.
+        try:
+            from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
+        except ImportError:
+            return {}
+        if not hasattr(self.model, "config"):
+            return {}
+        if not hasattr(self, "_rope_module"):
+            self._rope_module = LlamaRotaryEmbedding(self.model.config).to(self.running_device)
+        position_ids = torch.arange(
+            len_p, len_p + len_s, device=self.running_device, dtype=torch.long
+        ).unsqueeze(0)
+        # rotary_emb.forward only reads x.device / x.device.type, so a
+        # tiny dummy tensor in the running dtype is sufficient.
+        dummy_x = torch.empty(1, device=self.running_device, dtype=self.running_dtype)
+        cos, sin = self._rope_module(dummy_x, position_ids)
+        return {"position_embeddings": (cos, sin)}
 
     def get_past_key_value_args(self, k_cache, v_cache):
         return {'past_key_value': (k_cache, v_cache)}
