@@ -386,6 +386,12 @@ class AirLLMBaseModel(GenerationMixin):
         return self.forward(*args, **kwargs)
 
     def get_past_key_values_cache_seq_len(self, past_key_values):
+        # transformers>=4.36 replaced the legacy List[Tuple[k, v]] cache
+        # format with the Cache class hierarchy (DynamicCache, etc.),
+        # which isn't subscriptable. Prefer the public get_seq_length()
+        # API; fall back to the old tuple shape lookup for compatibility.
+        if hasattr(past_key_values, "get_seq_length"):
+            return past_key_values.get_seq_length()
         return past_key_values[0][0].shape[2]
     def get_sequence_len(self, seq):
         return seq.shape[1]
