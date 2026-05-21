@@ -590,7 +590,11 @@ class AirLLMBaseModel(GenerationMixin):
                             layer_outputs = layer(seq,
                                                   **kwargs
                                                   )
-                            new_seq = layer_outputs[0]
+                            # transformers>=5 may return a bare Tensor.
+                            if isinstance(layer_outputs, tuple):
+                                new_seq = layer_outputs[0]
+                            else:
+                                new_seq = layer_outputs
 
                             if output_attentions:
                                 all_self_attns[i].append(layer_outputs[1])
@@ -621,7 +625,13 @@ class AirLLMBaseModel(GenerationMixin):
                                 kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
 
 
-                                new_seq = layer(seq, **kwargs)[0]
+                                # transformers>=5 LlamaDecoderLayer.forward
+                                # returns a bare Tensor instead of a
+                                # (hidden_states,) tuple. Indexing [0] would
+                                # slice the first batch row and silently
+                                # corrupt the next layer's input shape.
+                                layer_out = layer(seq, **kwargs)
+                                new_seq = layer_out[0] if isinstance(layer_out, tuple) else layer_out
                             else:
 
                                 kwargs = {'use_cache': True,
