@@ -15,7 +15,13 @@ from transformers.quantizers import AutoHfQuantizer, HfQuantizer
 
 from .profiler import LayeredProfiler
 
-from optimum.bettertransformer import BetterTransformer
+# optimum.bettertransformer was removed in optimum>=1.21 (BetterTransformer
+# deprecated since transformers added native SDPA). Treat it as optional;
+# the sdpa fallback path below handles its absence.
+try:
+    from optimum.bettertransformer import BetterTransformer
+except ImportError:
+    BetterTransformer = None
 
 from .utils import clean_memory, load_layer, \
     find_or_create_local_splitted_path
@@ -184,7 +190,7 @@ class AirLLMBaseModel(GenerationMixin):
         # Load meta model (no memory used)
         self.model = None
 
-        if self.get_use_better_transformer():
+        if self.get_use_better_transformer() and BetterTransformer is not None:
             try:
                 with init_empty_weights():
                     self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
