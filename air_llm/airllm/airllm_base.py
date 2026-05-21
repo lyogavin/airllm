@@ -560,7 +560,16 @@ class AirLLMBaseModel(GenerationMixin):
                         if output_attentions:
                             all_hidden_states[i].append(new_seq)
 
-                        if past_key_values is not None:
+                        # transformers>=4.36 always passes a DynamicCache
+                        # (possibly empty) instead of None; the legacy
+                        # subscript past_key_values[i-1] crashes on it.
+                        # Treat an empty Cache the same as None so prefill
+                        # goes down the cache-free branch.
+                        _pkv_empty = past_key_values is None or (
+                            hasattr(past_key_values, "get_seq_length")
+                            and past_key_values.get_seq_length() == 0
+                        )
+                        if not _pkv_empty:
                             # join past kv
                             k_cache, v_cache = past_key_values[i - 1]
                             len_p = self.get_past_key_values_cache_seq_len(past_key_values)
