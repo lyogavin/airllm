@@ -28,6 +28,20 @@
 
 * [Best AI Facial Expression Editor](https://crazyfaceai.com)
 
+---
+
+[![Bloome — Run AI Agent Teams in the Cloud](https://github.com/lyogavin/airllm/blob/main/assets/bloome.png?raw=true)](https://bloome.im/login?ref=G6BYnov0)
+
+## Run AI Agent Teams in the Cloud — Bloome
+
+Bloome is an AI-agent IM platform: build and run AI agent teams in the cloud with zero setup. Add a skill as an agent in a group chat, run it in one click from web or mobile, and share it with your team — think of it as a group chat where your AI assistants are teammates you can @mention and assign tasks to.
+
+👉 Try Bloome: https://bloome.im/login?ref=G6BYnov0
+
+*Sponsored*
+
+---
+
 ## Updates
 [2024/08/20] v2.11.0: Support Qwen2.5
 
