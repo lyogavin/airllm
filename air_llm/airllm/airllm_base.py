@@ -15,8 +15,6 @@ from transformers.quantizers import AutoHfQuantizer, HfQuantizer
 
 from .profiler import LayeredProfiler
 
-from optimum.bettertransformer import BetterTransformer
-
 from .utils import clean_memory, load_layer, \
     find_or_create_local_splitted_path
 
@@ -180,39 +178,23 @@ class AirLLMBaseModel(GenerationMixin):
 
     def init_model(self):
 
-        # try way 1 better transformers...
-        # Load meta model (no memory used)
+        # Load meta model (no real memory used). Prefer PyTorch's SDPA (flash / memory-efficient
+        # attention), which is built into transformers now. BetterTransformer is deprecated and
+        # has been removed from optimum, so we no longer depend on it.
         self.model = None
 
-        if self.get_use_better_transformer():
-            try:
-                with init_empty_weights():
-                    self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
-                    self.model = BetterTransformer.transform(self.model)  # enable flash attention
-            except ValueError as ve:
-                del self.model
-                clean_memory()
-                self.model = None
+        try:
+            with init_empty_weights():
+                self.model = AutoModelForCausalLM.from_config(
+                    self.config, attn_implementation="sdpa", trust_remote_code=True)
+        except (ValueError, TypeError) as e:
+            # This architecture may not implement an SDPA path; fall back to the default attention.
+            print(f"attn_implementation='sdpa' not available ({e}), creating model with default attn implementation")
+            del self.model
+            clean_memory()
+            self.model = None
 
-            if self.model is None:
-                # try way 2.
-                try:
-
-                    print(f"new version of transfomer, no need to use BetterTransformer, try setting attn impl to sdpa...")
-                    self.config.attn_implementation = "sdpa"
-
-                    with init_empty_weights():
-                        self.model = AutoModelForCausalLM.from_config(self.config, attn_implementation="sdpa", trust_remote_code=True)
-                    print(f"attn imp: {type(self.model.model.layers[3].self_attn)}")
-
-                except TypeError as ve:
-                    del self.model
-                    clean_memory()
-                    self.model = None
-
-        # fallback to original way
         if self.model is None:
-            print(f"either BetterTransformer or attn_implementation='sdpa' is available, creating model directly")
             with init_empty_weights():
                 self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
 
