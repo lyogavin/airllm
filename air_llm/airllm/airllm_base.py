@@ -15,7 +15,13 @@ from transformers.quantizers import AutoHfQuantizer, HfQuantizer
 
 from .profiler import LayeredProfiler
 
-from optimum.bettertransformer import BetterTransformer
+# optimum.bettertransformer was removed in optimum>=1.21 (BetterTransformer
+# deprecated since transformers added native SDPA). Treat it as optional;
+# the sdpa fallback path below handles its absence.
+try:
+    from optimum.bettertransformer import BetterTransformer
+except ImportError:
+    BetterTransformer = None
 
 from .utils import clean_memory, load_layer, \
     find_or_create_local_splitted_path
@@ -184,7 +190,7 @@ class AirLLMBaseModel(GenerationMixin):
         # Load meta model (no memory used)
         self.model = None
 
-        if self.get_use_better_transformer():
+        if self.get_use_better_transformer() and BetterTransformer is not None:
             try:
                 with init_empty_weights():
                     self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
@@ -300,8 +306,19 @@ class AirLLMBaseModel(GenerationMixin):
         return state_dict
 
     def move_layer_to_device(self, state_dict):
+        # Shards on disk may contain tensors the currently-installed
+        # transformers no longer exposes on the model (e.g. per-layer
+        # self_attn.rotary_emb.inv_freq was removed in transformers>=4.45
+        # in favor of a single shared LlamaModel.rotary_emb). Filter to
+        # the intersection with what the live model actually has so we
+        # don't AttributeError inside set_module_tensor_to_device.
+        known = set(dict(self.model.named_parameters()).keys())
+        known.update(name for name, _ in self.model.named_buffers())
+
         layers = []
         for param_name, param in state_dict.items():
+            if param_name not in known:
+                continue
             if self.hf_quantizer is None:
                 layers.append(param_name)
             else:
@@ -369,12 +386,41 @@ class AirLLMBaseModel(GenerationMixin):
         return self.forward(*args, **kwargs)
 
     def get_past_key_values_cache_seq_len(self, past_key_values):
+        # transformers>=4.36 replaced the legacy List[Tuple[k, v]] cache
+        # format with the Cache class hierarchy (DynamicCache, etc.),
+        # which isn't subscriptable. Prefer the public get_seq_length()
+        # API; fall back to the old tuple shape lookup for compatibility.
+        if hasattr(past_key_values, "get_seq_length"):
+            return past_key_values.get_seq_length()
         return past_key_values[0][0].shape[2]
     def get_sequence_len(self, seq):
         return seq.shape[1]
 
     def get_pos_emb_args(self, len_p, len_s):
-        return {}
+        # transformers>=4.46 moved RoPE to the model level: per-layer
+        # LlamaAttention now expects position_embeddings=(cos, sin) to be
+        # supplied by the caller. Because our per-layer loop bypasses
+        # LlamaModel.forward (which is where rotary_emb normally runs),
+        # we reconstruct it here from the model config and inject cos/sin
+        # for the current position range. Defensive: if the import or
+        # construction fails (older transformers, non-Llama family),
+        # fall through to the legacy empty-dict behavior.
+        try:
+            from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
+        except ImportError:
+            return {}
+        if not hasattr(self.model, "config"):
+            return {}
+        if not hasattr(self, "_rope_module"):
+            self._rope_module = LlamaRotaryEmbedding(self.model.config).to(self.running_device)
+        position_ids = torch.arange(
+            len_p, len_p + len_s, device=self.running_device, dtype=torch.long
+        ).unsqueeze(0)
+        # rotary_emb.forward only reads x.device / x.device.type, so a
+        # tiny dummy tensor in the running dtype is sufficient.
+        dummy_x = torch.empty(1, device=self.running_device, dtype=self.running_dtype)
+        cos, sin = self._rope_module(dummy_x, position_ids)
+        return {"position_embeddings": (cos, sin)}
 
     def get_past_key_value_args(self, k_cache, v_cache):
         return {'past_key_value': (k_cache, v_cache)}
@@ -514,7 +560,16 @@ class AirLLMBaseModel(GenerationMixin):
                         if output_attentions:
                             all_hidden_states[i].append(new_seq)
 
-                        if past_key_values is not None:
+                        # transformers>=4.36 always passes a DynamicCache
+                        # (possibly empty) instead of None; the legacy
+                        # subscript past_key_values[i-1] crashes on it.
+                        # Treat an empty Cache the same as None so prefill
+                        # goes down the cache-free branch.
+                        _pkv_empty = past_key_values is None or (
+                            hasattr(past_key_values, "get_seq_length")
+                            and past_key_values.get_seq_length() == 0
+                        )
+                        if not _pkv_empty:
                             # join past kv
                             k_cache, v_cache = past_key_values[i - 1]
                             len_p = self.get_past_key_values_cache_seq_len(past_key_values)
@@ -535,7 +590,11 @@ class AirLLMBaseModel(GenerationMixin):
                             layer_outputs = layer(seq,
                                                   **kwargs
                                                   )
-                            new_seq = layer_outputs[0]
+                            # transformers>=5 may return a bare Tensor.
+                            if isinstance(layer_outputs, tuple):
+                                new_seq = layer_outputs[0]
+                            else:
+                                new_seq = layer_outputs
 
                             if output_attentions:
                                 all_self_attns[i].append(layer_outputs[1])
@@ -566,7 +625,13 @@ class AirLLMBaseModel(GenerationMixin):
                                 kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
 
 
-                                new_seq = layer(seq, **kwargs)[0]
+                                # transformers>=5 LlamaDecoderLayer.forward
+                                # returns a bare Tensor instead of a
+                                # (hidden_states,) tuple. Indexing [0] would
+                                # slice the first batch row and silently
+                                # corrupt the next layer's input shape.
+                                layer_out = layer(seq, **kwargs)
+                                new_seq = layer_out[0] if isinstance(layer_out, tuple) else layer_out
                             else:
 
                                 kwargs = {'use_cache': True,
