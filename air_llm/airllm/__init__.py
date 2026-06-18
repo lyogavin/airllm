@@ -11,6 +11,7 @@ if is_on_mac_os:
 else:
     from .airllm import AirLLMLlama2
     from .airllm_chatglm import AirLLMChatGLM
+    from .airllm_glm4 import AirLLMGLM4
     from .airllm_qwen import AirLLMQWen
     from .airllm_qwen2 import AirLLMQWen2
     from .airllm_baichuan import AirLLMBaichuan
@@ -21,4 +22,3 @@ else:
     from .auto_model import AutoModel
     from .utils import split_and_save_layers
     from .utils import NotEnoughSpaceException
-
