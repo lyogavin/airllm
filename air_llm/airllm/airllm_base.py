@@ -280,11 +280,34 @@ class AirLLMBaseModel:
         return names
 
     def _install_streaming_hooks(self):
-        # All modules execute in this order during a forward pass: embed -> layers -> norm -> lm_head.
-        for idx, (name, module) in enumerate(zip(self.layer_names, self.layers)):
+        # Modules execute in this order during a forward: embed -> layers -> norm -> lm_head.
+        n = len(self.layer_names)
+
+        # Detect tied input/output embeddings. When tied, lm_head shares the embedding weight, so
+        # there is no separate lm_head shard. We keep the embedding resident on the GPU (it is the
+        # only copy and such models are small) and re-tie lm_head to it, then stream only the
+        # decoder layers and the final norm.
+        self.tie_word_embeddings = bool(getattr(self.config, "tie_word_embeddings", False))
+
+        if self.tie_word_embeddings:
+            embed_state = self.load_layer_to_cpu(self.layer_names[0])
+            self.move_layer_to_device(embed_state)
+            self.model.tie_weights()
+            self._streamed_indices = list(range(1, n - 1))  # decoder layers + final norm
+        else:
+            self._streamed_indices = list(range(n))
+
+        self._streamed_set = set(self._streamed_indices)
+
+        for idx in self._streamed_indices:
+            module = self.layers[idx]
             module._airllm_idx = idx
             module.register_forward_pre_hook(self._pre_hook)
             module.register_forward_hook(self._post_hook)
+
+    def _next_streamed_idx(self, idx):
+        nxt = idx + 1
+        return nxt if nxt in self._streamed_set else None
 
     def _pre_hook(self, module, args):
         idx = module._airllm_idx
@@ -297,9 +320,11 @@ class AirLLMBaseModel:
 
         module._airllm_moved = self.move_layer_to_device(state_dict)
 
-        if self.prefetching and (idx + 1) < len(self.layer_names):
-            self._prefetch_future = self._executor.submit(self.load_layer_to_cpu, self.layer_names[idx + 1])
-            self._prefetched_idx = idx + 1
+        if self.prefetching:
+            nxt = self._next_streamed_idx(idx)
+            if nxt is not None:
+                self._prefetch_future = self._executor.submit(self.load_layer_to_cpu, self.layer_names[nxt])
+                self._prefetched_idx = nxt
 
     def _post_hook(self, module, args, output):
         if self.hf_quantizer is not None:

@@ -245,6 +245,11 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
             layers = [layer_names['rotary_pos_emb']] + layers
         layers = [l + "." for l in layers]
 
+    # Drop layers that have no weights in the checkpoint. This happens for tied embeddings,
+    # where lm_head shares storage with embed_tokens and has no entry of its own. Without this we
+    # would try to save an empty shard (which fails) and never detect the split as complete.
+    layers = [l for l in layers if any(k.startswith(l) for k in index.keys())]
+
 
     # check if splitting exists and all files are there
     found_layers = None

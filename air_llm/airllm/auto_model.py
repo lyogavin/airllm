@@ -10,47 +10,51 @@ if platform == "darwin":
 if is_on_mac_os:
     from airllm import AirLLMLlamaMlx
 
+# Architectures that need a dedicated AirLLM subclass because of a non-standard module layout
+# (custom remote-code models). Everything else uses the generic AirLLMBaseModel, which streams any
+# standard *ForCausalLM (model.model.layers + lm_head / norm) and lets transformers own the
+# forward pass, so newly released architectures work without code changes.
+ARCH_OVERRIDES = {
+    "ChatGLMModel": "AirLLMChatGLM",
+    "ChatGLMForConditionalGeneration": "AirLLMChatGLM",
+    "QWenLMHeadModel": "AirLLMQWen",
+    "BaichuanForCausalLM": "AirLLMBaichuan",
+    "BaiChuanForCausalLM": "AirLLMBaichuan",
+    "InternLMForCausalLM": "AirLLMInternLM",
+}
+
+
 class AutoModel:
     def __init__(self):
         raise EnvironmentError(
             "AutoModel is designed to be instantiated "
             "using the `AutoModel.from_pretrained(pretrained_model_name_or_path)` method."
         )
+
     @classmethod
     def get_module_class(cls, pretrained_model_name_or_path, *inputs, **kwargs):
         if 'hf_token' in kwargs:
-            print(f"using hf_token")
-            config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True, token=kwargs['hf_token'])
+            config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True,
+                                                token=kwargs['hf_token'])
         else:
             config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True)
 
-        if "Qwen2ForCausalLM" in config.architectures[0]:
-            return "airllm", "AirLLMQWen2"
-        elif "QWen" in config.architectures[0]:
-            return "airllm", "AirLLMQWen"
-        elif "Baichuan" in config.architectures[0]:
-            return "airllm", "AirLLMBaichuan"
-        elif "ChatGLM" in config.architectures[0]:
-            return "airllm", "AirLLMChatGLM"
-        elif "InternLM" in config.architectures[0]:
-            return "airllm", "AirLLMInternLM"
-        elif "Mistral" in config.architectures[0]:
-            return "airllm", "AirLLMMistral"
-        elif "Mixtral" in config.architectures[0]:
-            return "airllm", "AirLLMMixtral"
-        elif "Llama" in config.architectures[0]:
-            return "airllm", "AirLLMLlama2"
-        else:
-            print(f"unknown artichitecture: {config.architectures[0]}, try to use Llama2...")
-            return "airllm", "AirLLMLlama2"
+        architectures = getattr(config, "architectures", None) or []
+        arch = architectures[0] if architectures else ""
+
+        cls_name = ARCH_OVERRIDES.get(arch)
+        if cls_name is None:
+            print(f"using generic AirLLM streaming model for architecture: {arch or 'unknown'}")
+            cls_name = "AirLLMBaseModel"
+        return "airllm", cls_name
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *inputs, **kwargs):
 
         if is_on_mac_os:
-            return AirLLMLlamaMlx(pretrained_model_name_or_path, *inputs, ** kwargs)
+            return AirLLMLlamaMlx(pretrained_model_name_or_path, *inputs, **kwargs)
 
-        module, cls = AutoModel.get_module_class(pretrained_model_name_or_path, *inputs, **kwargs)
+        module, class_name = AutoModel.get_module_class(pretrained_model_name_or_path, *inputs, **kwargs)
         module = importlib.import_module(module)
-        class_ = getattr(module, cls)
-        return class_(pretrained_model_name_or_path, *inputs, ** kwargs)
+        class_ = getattr(module, class_name)
+        return class_(pretrained_model_name_or_path, *inputs, **kwargs)
