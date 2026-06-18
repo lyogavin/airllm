@@ -67,8 +67,10 @@
 * [Run on MacOS](#macos)
 * [Example notebooks](#example-python-notebook)
 * [Supported Models](#supported-models)
+* [How it works](#how-it-works)
 * [Acknowledgement](#acknowledgement)
 * [FAQ](#faq)
+* [Troubleshooting](#troubleshooting)
 
 ## Quickstart
 
@@ -254,6 +256,39 @@ model.tokenizer.decode(generation_output.sequences[0])
 #### To request other model support: [here](https://docs.google.com/forms/d/e/1FAIpQLSe0Io9ANMT964Zi-OQOq1TJmnvP-G3_ZgQDhP7SatN0IEdbOg/viewform?usp=sf_link)
 
 
+## How it works
+
+AirLLM fits a 70B+ model into 4 GB of VRAM by **never** keeping the whole
+checkpoint in GPU memory at once. The pipeline is:
+
+1. **Shard the checkpoint on disk.** The first time you load a model,
+   AirLLM reads `model.safetensors.index.json` (or `pytorch_model.bin.index.json`),
+   iterates the safetensors shards, and re-saves each transformer layer as
+   its own single-file safetensors under `<cache>/splitted_model/`.
+2. **Stream layers to the GPU.** During the forward pass, the
+   `GenerationMixin` integration in `AirLLMBaseModel` runs the model one
+   layer at a time. For each step we:
+   - read the next layer's safetensors file into CPU RAM,
+   - move its parameters onto the GPU with `accelerate.utils.set_module_tensor_to_device`,
+   - run the layer on the current input,
+   - delete the layer and call `torch.cuda.empty_cache()` to free VRAM
+     before the next layer is loaded.
+3. **Cache past key/values in CPU RAM.** The KV-cache lives in pinned host
+   memory so it survives the layer churn, and only the small per-step
+   hidden state ever needs to live on the GPU.
+4. **Overlap I/O and compute (prefetching).** A background thread starts
+   reading the *next* layer's safetensors file while the current layer
+   is still computing. This typically hides the disk-read cost and gives
+   a 10–30% speed-up over naive sequential loading.
+5. **Optional 4-bit / 8-bit compression.** If you pass
+   `compression='4bit'` or `'8bit'` to `from_pretrained`, AirLLM uses
+   `bitsandbytes` block-wise quantization on the weights at sharding
+   time. The on-disk shards are then ~2× (8-bit) or ~4× (4-bit) smaller,
+   which reduces the I/O bottleneck at the cost of a tiny accuracy loss.
+
+Because the bottleneck is disk + CPU RAM bandwidth rather than GPU
+compute, inference is bandwidth-bound. SSDs (preferably NVMe) and lots
+of free RAM will get you the best throughput.
 
 ## Acknowledgement
 
@@ -311,6 +346,49 @@ input_tokens = model.tokenizer(input_text,
     padding=False  #<-----------   turn off padding 
 )
 ```
+
+## Troubleshooting
+
+#### `UnknownArchitectureError: Unsupported architecture 'XForCausalLM' ...`
+
+This means the model you're loading isn't in the dispatch table yet. The
+message prints the full list of supported architectures and links to the
+issue tracker — open an issue there or send a PR adding the new
+`(needle, class_name)` entry to `_ARCHITECTURE_DISPATCH` in
+`airllm/auto_model.py`.
+
+#### `NotEnoughSpaceException: Not enough space ...`
+
+AirLLM needs roughly the size of the original safetensors shards in
+free disk space under your HF cache (plus a bit of headroom for the
+sharded output). Either free up space, point `layer_shards_saving_path`
+at a bigger drive, or set `delete_original=True` so AirLLM deletes each
+shard as soon as it has been re-saved.
+
+#### `CUDA out of memory` even though the model should fit
+
+The sharded weights still have to be on the GPU for the duration of
+one layer's forward pass, so the per-layer parameter size is the real
+ceiling — not the total model size. If you hit OOM, enable compression
+(`compression='4bit'`) or lower `max_seq_len`. Also confirm that no
+other process is holding GPU memory (`nvidia-smi`).
+
+#### `rope_scaling must be a dictionary with two fields`
+
+You are running an old `transformers` release. AirLLM now requires
+`transformers>=4.36`; either upgrade (`pip install -U transformers`) or
+pin the older version that the model was published against.
+
+#### Inference is slower than the README claims
+
+The bottleneck is disk I/O, not GPU compute. Things that help, in
+order of impact:
+
+- install on an NVMe SSD (not a network mount, not a spinning disk)
+- leave `prefetching=True` (the default)
+- enable `compression='4bit'` if you have `bitsandbytes` installed
+- close other RAM-hungry processes; AirLLM keeps the KV-cache in host
+  memory and a full 4k-token 70B context uses ~10 GB of RAM
 
 ## Citing AirLLM
 

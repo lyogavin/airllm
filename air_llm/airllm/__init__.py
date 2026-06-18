@@ -1,9 +1,4 @@
-from sys import platform
-
-is_on_mac_os = False
-
-if platform == "darwin":
-    is_on_mac_os = True
+from .utils import is_on_mac_os
 
 if is_on_mac_os:
     from .airllm_llama_mlx import AirLLMLlamaMlx
@@ -21,4 +16,3 @@ else:
     from .auto_model import AutoModel
     from .utils import split_and_save_layers
     from .utils import NotEnoughSpaceException
-
