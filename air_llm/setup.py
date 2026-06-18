@@ -35,8 +35,15 @@ setuptools.setup(
         'optimum',
         'huggingface-hub',
         'scipy',
-        #'bitsandbytes' set it to optional to support fallback when not installable
+        # 'bitsandbytes'   -- optional; required only for 4-bit/8-bit compression on NVIDIA GPUs
+        # 'torch-directml' -- optional; required for Intel/AMD integrated GPU on Windows
+        #                     install with: pip install torch-directml
+        #                     then use: device="privateuseone:0"
     ],
+    extras_require={
+        'compression': ['bitsandbytes'],
+        'directml': ['torch-directml'],
+    },
     cmdclass={
         'install': PostInstallCommand,
     },
