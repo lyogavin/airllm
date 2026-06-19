@@ -267,27 +267,44 @@ class AirLLMBaseModel:
     def move_layer_to_device(self, state_dict):
         moved = []
         for param_name in self._param_names_from_state_dict(state_dict):
-            if (self.hf_quantizer is None or
-                    not self.hf_quantizer.check_quantized_param(self.model, param_value=None,
-                                                                param_name=param_name, state_dict={})):
-                set_module_tensor_to_device(self.model, param_name, self.running_device,
-                                            value=state_dict[param_name], dtype=self.running_dtype)
-            else:
+            if self.hf_quantizer is not None and self._needs_quantization(param_name):
+                # On-the-fly-quantizing schemes (e.g. bitsandbytes) reconstruct the param from the
+                # weight plus companion quant-state tensors carried in state_dict.
                 self.hf_quantizer.create_quantized_param(self.model, state_dict[param_name], param_name,
                                                          self.running_device, state_dict)
+            else:
+                # Normal load. Pre-quantized weights (fp8) and their block scales must be placed
+                # verbatim: casting an fp8 weight to fp16 silently drops the quantization and the
+                # accompanying weight_scale_inv, producing garbage. Only ordinary high-precision
+                # tensors get cast to the runtime dtype.
+                value = state_dict[param_name]
+                if value.dtype in (torch.float8_e4m3fn, torch.float8_e5m2) or param_name.endswith("_scale_inv"):
+                    set_module_tensor_to_device(self.model, param_name, self.running_device, value=value)
+                else:
+                    set_module_tensor_to_device(self.model, param_name, self.running_device,
+                                                value=value, dtype=self.running_dtype)
             moved.append(param_name)
         return moved
 
+    def _needs_quantization(self, param_name):
+        q = self.hf_quantizer
+        # transformers renamed check_quantized_param -> param_needs_quantization.
+        if hasattr(q, "param_needs_quantization"):
+            return q.param_needs_quantization(self.model, param_name)
+        return q.check_quantized_param(self.model, param_value=None, param_name=param_name, state_dict={})
+
     def _param_names_from_state_dict(self, state_dict):
-        if self.hf_quantizer is None:
-            return list(state_dict.keys())
         names = []
         for param_name in state_dict.keys():
-            if '.weight' in param_name:
-                layer_name = param_name[:param_name.index(".weight") + len(".weight")]
-                if layer_name not in names:
-                    names.append(layer_name)
-            else:
+            # bitsandbytes stores a weight plus companion quant-state tensors named
+            # "<weight>.4bit.*" / "<weight>.8bit.*"; those are reconstructed together via
+            # create_quantized_param, so collapse them down to the base weight name. Everything
+            # else (including fp8 weight + weight_scale_inv pairs) is kept as distinct params.
+            if '.4bit.' in param_name or '.8bit.' in param_name:
+                base = param_name.split('.4bit.')[0].split('.8bit.')[0]
+                if base not in names:
+                    names.append(base)
+            elif param_name not in names:
                 names.append(param_name)
         return names
 
