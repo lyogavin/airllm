@@ -277,6 +277,17 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     n_shards = len(set(index.values()))
     state_dict = {}
 
+    # Map shard ordinal -> actual checkpoint filename, taken straight from the index. We must NOT
+    # reconstruct names like f"model-000{n:02d}-of-000{n_shards:02d}.safetensors": repos differ in
+    # zero-padding width (e.g. DeepSeek uses model-00001-of-000004.safetensors) and in extension.
+    shard_num_to_file = {}
+    for v in set(index.values()):
+        parts = v.split('-')
+        if len(parts) > 1:
+            try:
+                shard_num_to_file[int(parts[1])] = v
+            except ValueError:
+                pass
 
     if not os.path.exists(saving_path):
         #os.makedirs(saving_path)
@@ -293,20 +304,14 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
             if max(shards) > shard:
                 # optinoally delete original file
                 if delete_original and shard != 0:
-                    if not safetensors_format:
-                        to_delete = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
-                    else:
-                        to_delete = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
+                    to_delete = checkpoint_path / shard_num_to_file[shard]
 
                     print(f"deleting original file: {to_delete}")
                     remove_real_and_linked_file(to_delete)
                 shard += 1
                 print(f'Loading shard {shard}/{n_shards}')
 
-                if not safetensors_format:
-                    to_load = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
-                else:
-                    to_load = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
+                to_load = checkpoint_path / shard_num_to_file[shard]
 
                 # check if to_load exist, if not downloaad it...
                 if not os.path.exists(to_load):

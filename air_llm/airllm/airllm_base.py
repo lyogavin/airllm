@@ -105,10 +105,19 @@ class AirLLMBaseModel:
         self.running_dtype = dtype
         self.dtype = self.running_dtype
 
-        if hf_token is not None:
-            self.config = AutoConfig.from_pretrained(self.model_local_path, token=hf_token, trust_remote_code=True)
-        else:
-            self.config = AutoConfig.from_pretrained(self.model_local_path, trust_remote_code=True)
+        # Prefer transformers' native implementation; only trust the model's bundled remote code when
+        # transformers doesn't recognize the architecture. Vendored remote code is frequently pinned
+        # to an old transformers and breaks against the current cache/generation APIs (e.g.
+        # DeepSeek-V2's modeling_deepseek.py calls the long-removed DynamicCache.seen_tokens).
+        token_kwargs = {'token': hf_token} if hf_token is not None else {}
+        try:
+            self.config = AutoConfig.from_pretrained(
+                self.model_local_path, trust_remote_code=False, **token_kwargs)
+            self.trust_remote_code = False
+        except Exception:
+            self.config = AutoConfig.from_pretrained(
+                self.model_local_path, trust_remote_code=True, **token_kwargs)
+            self.trust_remote_code = True
 
         self.generation_config = self.get_generation_config()
         self.tokenizer = self.get_tokenizer(hf_token=hf_token)
@@ -162,13 +171,16 @@ class AirLLMBaseModel:
         try:
             with init_empty_weights(include_buffers=False):
                 self.model = AutoModelForCausalLM.from_config(
-                    self.config, attn_implementation="sdpa", trust_remote_code=True)
+                    self.config, attn_implementation="sdpa", trust_remote_code=self.trust_remote_code)
         except (ValueError, TypeError) as e:
-            print(f"attn_implementation='sdpa' not available ({e}), using default attn implementation")
+            print(f"attn_implementation='sdpa' not available ({e}), falling back to eager attention")
             self.model = None
         if self.model is None:
+            # Some (often remote-code) architectures don't support sdpa and also default to it, so we
+            # must request eager explicitly; otherwise transformers re-selects sdpa and errors again.
             with init_empty_weights(include_buffers=False):
-                self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
+                self.model = AutoModelForCausalLM.from_config(
+                    self.config, attn_implementation="eager", trust_remote_code=self.trust_remote_code)
 
         quantization_config = getattr(self.config, "quantization_config", None)
         if quantization_config is not None:
