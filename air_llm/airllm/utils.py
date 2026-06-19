@@ -301,8 +301,12 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         # checking whether after spliting from '-', if second element exists. otherwise it throws errors for single 'model.safetensor' files
         shards = [int(v.split('-')[1]) for k, v in index.items() if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
         if len(shards) > 0:
-            if max(shards) > shard:
-                # optinoally delete original file
+            # A layer can span several shards (especially fp8 checkpoints, where each weight has a
+            # companion weight_scale_inv tensor). Load *every* shard up to the highest one this layer
+            # references, not just the next one -- otherwise the layer is saved missing some tensors
+            # (e.g. the block scales), which silently corrupts fp8 weights.
+            while max(shards) > shard:
+                # optionally delete the original file we're done with (its tensors are already in RAM)
                 if delete_original and shard != 0:
                     to_delete = checkpoint_path / shard_num_to_file[shard]
 
