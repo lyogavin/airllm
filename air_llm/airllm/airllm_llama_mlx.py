@@ -18,6 +18,32 @@ from .utils import clean_memory, load_layer, \
     find_or_create_local_splitted_path
 
 
+def _coerce_to_mlx_array(x):
+    """Normalize the input passed to AirLLMLlamaMlx.generate() into an mlx.array.
+
+    Tokenizer callers naturally use ``return_tensors="pt"`` (torch) or
+    ``return_tensors="np"`` (numpy) — both are common in the HuggingFace
+    ecosystem. The downstream ``tok_embeddings`` call requires an ``mlx.array``
+    index; without coercion, a torch tensor raises
+    ``ValueError: Cannot index mlx array using the given type.`` and a
+    numpy array works only by accident through the array interface.
+
+    This helper accepts mlx arrays (passthrough), torch tensors,
+    numpy arrays, or python sequences and returns a fresh ``mlx.array``.
+    """
+    if isinstance(x, mx.array):
+        return x
+    if hasattr(x, "detach"):
+        # torch.Tensor — detach + cpu + numpy handles tensors that may
+        # be on an accelerator device or have grad attached.
+        return mx.array(x.detach().cpu().numpy())
+    if hasattr(x, "__array__"):
+        # numpy.ndarray or anything implementing the array interface.
+        return mx.array(x)
+    # list / tuple / scalar — direct construction.
+    return mx.array(x)
+
+
 
 @dataclass
 class ModelArgs:
@@ -250,6 +276,14 @@ class AirLLMLlamaMlx:
 
 
     def generate(self, x, temperature=0, max_new_tokens=None, **kwargs):
+        # Coerce the input to mlx.array before passing it down — the
+        # tok_embeddings call inside model_generate requires an mlx
+        # array index. Tokenizer callers typically pass torch tensors
+        # (``return_tensors="pt"``) or numpy arrays; without this
+        # coercion, torch tensors raise
+        # ``ValueError: Cannot index mlx array using the given type.``
+        x = _coerce_to_mlx_array(x)
+
         tokens = []
         for token in self.model_generate(x, temperature=temperature):
             tokens.append(token)
