@@ -47,7 +47,7 @@ class AirLLMBaseModel:
                                  'norm': 'model.norm',
                                  'lm_head': 'lm_head'}
 
-    def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=torch.float16, max_seq_len=512,
+    def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
                  hf_token=None, prefetching=True, delete_original=False):
         """
@@ -58,7 +58,9 @@ class AirLLMBaseModel:
         device : str, optional
             device, by default "cuda:0"
         dtype : torch.dtype, optional
-            dtype, by default torch.float16
+            runtime dtype; defaults to the model's own config.torch_dtype (usually bfloat16 for
+            modern models). float16 has too narrow a range for very deep models and overflows to
+            inf/NaN, which silently corrupts the output, so we don't force it.
         max_seq_len : int, optional
             max seq length, by default 512
         layer_shards_saving_path : str, optional
@@ -102,8 +104,6 @@ class AirLLMBaseModel:
 
         self.running_device = device
         self.device = torch.device(self.running_device)
-        self.running_dtype = dtype
-        self.dtype = self.running_dtype
 
         # Prefer transformers' native implementation; only trust the model's bundled remote code when
         # transformers doesn't recognize the architecture. Vendored remote code is frequently pinned
@@ -118,6 +118,17 @@ class AirLLMBaseModel:
             self.config = AutoConfig.from_pretrained(
                 self.model_local_path, trust_remote_code=True, **token_kwargs)
             self.trust_remote_code = True
+
+        # Default to the model's native dtype (bf16 for most modern models). Forcing fp16 overflows
+        # on deep models (e.g. Qwen3-235B's 94 layers) and produces garbage; bf16's wider range
+        # avoids it. Users can still override via dtype=.
+        if dtype is None:
+            cfg_dtype = getattr(self.config, "torch_dtype", None)
+            if isinstance(cfg_dtype, str):
+                cfg_dtype = getattr(torch, cfg_dtype, None)
+            dtype = cfg_dtype if isinstance(cfg_dtype, torch.dtype) else torch.float16
+        self.running_dtype = dtype
+        self.dtype = self.running_dtype
 
         self.generation_config = self.get_generation_config()
         self.tokenizer = self.get_tokenizer(hf_token=hf_token)
