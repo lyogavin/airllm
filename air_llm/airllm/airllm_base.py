@@ -15,7 +15,12 @@ from transformers.quantizers import AutoHfQuantizer, HfQuantizer
 
 from .profiler import LayeredProfiler
 
-from optimum.bettertransformer import BetterTransformer
+try:
+    from optimum.bettertransformer import BetterTransformer
+except Exception:
+    # Recent optimum/transformers combinations can raise at import time because
+    # BetterTransformer is deprecated. AirLLM can still use the SDPA/direct path.
+    BetterTransformer = None
 
 from .utils import clean_memory, load_layer, \
     find_or_create_local_splitted_path
@@ -178,6 +183,9 @@ class AirLLMBaseModel(GenerationMixin):
     def get_use_better_transformer(self):
         return True
 
+    def create_model_from_config(self, **kwargs):
+        return AutoModelForCausalLM.from_config(self.config, trust_remote_code=True, **kwargs)
+
     def init_model(self):
 
         # try way 1 better transformers...
@@ -185,14 +193,15 @@ class AirLLMBaseModel(GenerationMixin):
         self.model = None
 
         if self.get_use_better_transformer():
-            try:
-                with init_empty_weights():
-                    self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
-                    self.model = BetterTransformer.transform(self.model)  # enable flash attention
-            except ValueError as ve:
-                del self.model
-                clean_memory()
-                self.model = None
+            if BetterTransformer is not None:
+                try:
+                    with init_empty_weights():
+                        self.model = self.create_model_from_config()
+                        self.model = BetterTransformer.transform(self.model)  # enable flash attention
+                except (ValueError, RuntimeError):
+                    del self.model
+                    clean_memory()
+                    self.model = None
 
             if self.model is None:
                 # try way 2.
@@ -202,7 +211,7 @@ class AirLLMBaseModel(GenerationMixin):
                     self.config.attn_implementation = "sdpa"
 
                     with init_empty_weights():
-                        self.model = AutoModelForCausalLM.from_config(self.config, attn_implementation="sdpa", trust_remote_code=True)
+                        self.model = self.create_model_from_config(attn_implementation="sdpa")
                     print(f"attn imp: {type(self.model.model.layers[3].self_attn)}")
 
                 except TypeError as ve:
@@ -214,7 +223,7 @@ class AirLLMBaseModel(GenerationMixin):
         if self.model is None:
             print(f"either BetterTransformer or attn_implementation='sdpa' is available, creating model directly")
             with init_empty_weights():
-                self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
+                self.model = self.create_model_from_config()
 
         quantization_config = getattr(self.config, "quantization_config", None)
 
@@ -300,6 +309,24 @@ class AirLLMBaseModel(GenerationMixin):
         return state_dict
 
     def move_layer_to_device(self, state_dict):
+        use_legacy_quantizer_api = (
+            self.hf_quantizer is not None
+            and hasattr(self.hf_quantizer, "check_quantized_param")
+            and hasattr(self.hf_quantizer, "create_quantized_param")
+        )
+
+        if self.hf_quantizer is not None and not use_legacy_quantizer_api:
+            moved_layers = []
+            for param_name, param in state_dict.items():
+                set_module_tensor_to_device(
+                    self.model,
+                    param_name,
+                    self.running_device,
+                    value=param,
+                )
+                moved_layers.append(param_name)
+            return moved_layers
+
         layers = []
         for param_name, param in state_dict.items():
             if self.hf_quantizer is None:
@@ -566,7 +593,8 @@ class AirLLMBaseModel(GenerationMixin):
                                 kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
 
 
-                                new_seq = layer(seq, **kwargs)[0]
+                                layer_out = layer(seq, **kwargs)
+                                new_seq = layer_out[0] if isinstance(layer_out, tuple) else layer_out
                             else:
 
                                 kwargs = {'use_cache': True,
