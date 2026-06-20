@@ -32,7 +32,7 @@ class ModelPersister:
     def model_persist_exist(self, layer_name, saving_path):
         pass
 
-    def persist_model(self, state_dict, layer_name, path):
+    def persist_model(self, state_dict, layer_name, path, compression=None):
         pass
 
     def load_model(self, layer_name, path):

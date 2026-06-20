@@ -142,7 +142,15 @@ def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None
             total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
 
     if compression == '4bit':
-        total_shard_files_size_bytes = int(total_shard_files_size_bytes / 0.2813)
+        # Mac path uses mx.quantize: 4bit shards measure ~0.28× of fp16 source
+        # (TinyLlama: 590/2098 = 0.281). The original /0.2813 multiplier on the
+        # CUDA path treats this as the *required* free space and is wildly
+        # over-conservative on disk usage; keep it for bnb compatibility but use
+        # the measured ratio on Mac.
+        if is_on_mac_os:
+            total_shard_files_size_bytes = int(total_shard_files_size_bytes * 0.30)
+        else:
+            total_shard_files_size_bytes = int(total_shard_files_size_bytes / 0.2813)
     elif compression == '8bit':
         total_shard_files_size_bytes = total_shard_files_size_bytes // 2
 
@@ -155,6 +163,12 @@ def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None
                                       )
 
 def compress_layer_state_dict(layer_state_dict, compression=None):
+    # On Mac / no-bitsandbytes builds, defer compression to the persister.
+    # MlxModelPersister.persist_model handles 4bit via mx.quantize. CUDA path
+    # uses bitsandbytes nf4/blockwise here (requires .cuda() tensors).
+    if compression in ('4bit', '8bit') and not bitsandbytes_installed:
+        return layer_state_dict
+
     compressed_layer_state_dict = None
     if compression == '4bit':
         compressed_layer_state_dict = {}
@@ -192,7 +206,13 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     """
 
     if compression is not None:
-        assert bitsandbytes_installed, f"when using compression bitsandbytes has to be installed."
+        # bitsandbytes is required only for the CUDA quantization path
+        # (compress_layer_state_dict). On Mac we use mx.quantize via the MLX
+        # persister and don't need bnb.
+        if is_on_mac_os:
+            assert compression == '4bit', f"only '4bit' supported on macOS for now, got {compression!r}"
+        else:
+            assert bitsandbytes_installed, f"when using compression bitsandbytes has to be installed."
         splitted_model_dir_name = splitted_model_dir_name + "." + compression
 
     checkpoint_path = Path(checkpoint_path)
@@ -205,14 +225,43 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
 
     safetensors_format = False
+    # if no index file is present, the repo may be a single-file model — try to
+    # fetch the single weight file on demand (the upstream snapshot_download
+    # excludes *.safetensors / *.bin)
+    if not (os.path.exists(checkpoint_path / 'pytorch_model.bin.index.json')
+            or os.path.exists(checkpoint_path / 'model.safetensors.index.json')):
+        if repo_id is not None:
+            for _fname in ('model.safetensors', 'pytorch_model.bin'):
+                if not os.path.exists(checkpoint_path / _fname):
+                    try:
+                        huggingface_hub.hf_hub_download(repo_id, _fname, token=hf_token)
+                    except Exception:
+                        pass
+
     if os.path.exists(checkpoint_path / 'pytorch_model.bin.index.json'):
         with open(checkpoint_path / 'pytorch_model.bin.index.json', 'rb') as f:
             index = json.load(f)['weight_map']
-    else:
+    elif os.path.exists(checkpoint_path / 'model.safetensors.index.json'):
         safetensors_format = True
-        assert os.path.exists(checkpoint_path / 'model.safetensors.index.json'), f'model.safetensors.index.json should exist.'
         with open(checkpoint_path / 'model.safetensors.index.json', 'rb') as f:
             index = json.load(f)['weight_map']
+    elif os.path.exists(checkpoint_path / 'model.safetensors'):
+        # single-file safetensors — synthesize an index pointing every key to the one file
+        safetensors_format = True
+        from safetensors import safe_open
+        with safe_open(str(checkpoint_path / 'model.safetensors'), framework='pt') as f:
+            index = {k: 'model.safetensors' for k in f.keys()}
+    elif os.path.exists(checkpoint_path / 'pytorch_model.bin'):
+        # single-file pytorch pickle — synthesize index
+        safetensors_format = False
+        sd = torch.load(checkpoint_path / 'pytorch_model.bin', map_location='cpu')
+        index = {k: 'pytorch_model.bin' for k in sd.keys()}
+        del sd
+    else:
+        raise FileNotFoundError(
+            f"No weight files found in {checkpoint_path}. Expected one of: "
+            f"pytorch_model.bin[.index.json], model.safetensors[.index.json]."
+        )
 
     if layer_names is None:
         n_layers = len(set([int(k.split('.')[2]) for k in index.keys() if 'model.layers' in k]))
@@ -320,7 +369,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
         marker_exists = ModelPersister.get_model_persister().model_persist_exist(layer, saving_path)
         if not marker_exists:
-            ModelPersister.get_model_persister().persist_model(layer_state_dict, layer, saving_path)
+            ModelPersister.get_model_persister().persist_model(layer_state_dict, layer, saving_path, compression=compression)
 
         # Free memory
         for k in layer_state_dict.keys():

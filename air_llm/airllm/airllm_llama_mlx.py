@@ -74,12 +74,9 @@ class RMSNorm(nn.Module):
         self.weight = mx.ones((dims,))
         self.eps = eps
 
-    def _norm(self, x):
-        return x * mx.rsqrt(x.square().mean(-1, keepdims=True) + self.eps)
-
     def __call__(self, x):
-        output = self._norm(x.astype(mx.float32)).astype(x.dtype)
-        return self.weight * output
+        # mx.fast.rms_norm: single Metal kernel, fused mean + rsqrt + scale
+        return mx.fast.rms_norm(x, self.weight, self.eps)
 
 
 class Attention(nn.Module):
@@ -108,20 +105,15 @@ class Attention(nn.Module):
         mask: Optional[mx.array] = None,
         cache: Optional[Tuple[mx.array, mx.array]] = None,
     ) -> mx.array:
-        B, L, D = x.shape
+        B, L, _ = x.shape
 
         queries, keys, values = self.wq(x), self.wk(x), self.wv(x)
 
-        # Prepare the queries, keys and values for the attention computation
+        # Reshape into [B, n_heads, L, head_dim]; mx.fast.SDPA handles GQA natively
+        # so we keep keys/values at n_kv_heads (no manual tiling).
         queries = queries.reshape(B, L, self.n_heads, -1).transpose(0, 2, 1, 3)
         keys = keys.reshape(B, L, self.n_kv_heads, -1).transpose(0, 2, 1, 3)
         values = values.reshape(B, L, self.n_kv_heads, -1).transpose(0, 2, 1, 3)
-
-        def repeat(a):
-            a = mx.concatenate([mx.expand_dims(a, 2)] * self.repeats, axis=2)
-            return a.reshape([B, self.n_heads, L, -1])
-
-        keys, values = map(repeat, (keys, values))
 
         if cache is not None:
             key_cache, value_cache = cache
@@ -129,15 +121,20 @@ class Attention(nn.Module):
             keys = self.rope(keys, offset=key_cache.shape[2])
             keys = mx.concatenate([key_cache, keys], axis=2)
             values = mx.concatenate([value_cache, values], axis=2)
+            # Single-token gen step: causal mask is degenerate (q sees all of k),
+            # so no mask needed.
+            sdpa_mask = None
         else:
             queries = self.rope(queries)
             keys = self.rope(keys)
+            # Prompt-pass: native causal string is faster than a built additive mask.
+            sdpa_mask = "causal"
 
-        scores = (queries * self.scale) @ keys.transpose(0, 1, 3, 2)
-        if mask is not None:
-            scores += mask
-        scores = mx.softmax(scores.astype(mx.float32), axis=-1).astype(scores.dtype)
-        output = (scores @ values).transpose(0, 2, 1, 3).reshape(B, L, -1)
+        # Fused MHA/GQA — replaces manual matmul + softmax + matmul chain.
+        output = mx.fast.scaled_dot_product_attention(
+            queries, keys, values, scale=self.scale, mask=sdpa_mask
+        )
+        output = output.transpose(0, 2, 1, 3).reshape(B, L, -1)
         return self.wo(output), (keys, values)
 
 
@@ -182,6 +179,61 @@ def sample(logits, temperature=0):
     else:
         return mx.random.categorical(logits * (1 / temperature))
 
+
+def block_forward_fn(
+    x, use_causal_mask, cache_k, cache_v, has_cache,
+    attn_norm_w, ffn_norm_w,
+    wq_w, wk_w, wv_w, wo_w,
+    w1_w, w2_w, w3_w,
+    n_heads, n_kv_heads, head_dim, scale, rope_theta, rope_traditional, norm_eps,
+):
+    """Pure functional TransformerBlock forward, built on Metal-fused primitives:
+      - mx.fast.rms_norm  (single-kernel RMSNorm)
+      - mx.fast.rope       (single-kernel RoPE with offset)
+      - mx.fast.scaled_dot_product_attention  (fused MHA/GQA, native causal)
+    Weights as explicit args so mx.compile traces by shape, not by closure refs."""
+    B, L, _ = x.shape
+
+    # pre-attn RMSNorm (fused)
+    h_norm = mx.fast.rms_norm(x, attn_norm_w, norm_eps)
+
+    # QKV projections
+    q = h_norm @ wq_w.T
+    k = h_norm @ wk_w.T
+    v = h_norm @ wv_w.T
+
+    q = q.reshape(B, L, n_heads, head_dim).transpose(0, 2, 1, 3)
+    k = k.reshape(B, L, n_kv_heads, head_dim).transpose(0, 2, 1, 3)
+    v = v.reshape(B, L, n_kv_heads, head_dim).transpose(0, 2, 1, 3)
+
+    # RoPE (fused, with offset)
+    if has_cache:
+        offset = cache_k.shape[2]
+        q = mx.fast.rope(q, head_dim, traditional=rope_traditional, base=rope_theta, scale=1.0, offset=offset)
+        k = mx.fast.rope(k, head_dim, traditional=rope_traditional, base=rope_theta, scale=1.0, offset=offset)
+        k = mx.concatenate([cache_k, k], axis=2)
+        v = mx.concatenate([cache_v, v], axis=2)
+    else:
+        q = mx.fast.rope(q, head_dim, traditional=rope_traditional, base=rope_theta, scale=1.0, offset=0)
+        k = mx.fast.rope(k, head_dim, traditional=rope_traditional, base=rope_theta, scale=1.0, offset=0)
+
+    # attention (fused; native GQA — no need to tile k,v)
+    sdpa_mask = "causal" if use_causal_mask else None
+    attn_out = mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask=sdpa_mask)
+    attn_out = attn_out.transpose(0, 2, 1, 3).reshape(B, L, -1)
+    attn_out = attn_out @ wo_w.T
+
+    h = x + attn_out
+
+    # FFN block
+    h_norm2 = mx.fast.rms_norm(h, ffn_norm_w, norm_eps)
+    gate = nn.silu(h_norm2 @ w1_w.T)
+    up = h_norm2 @ w3_w.T
+    ffn_out = (gate * up) @ w2_w.T
+
+    out = h + ffn_out
+    return out, k, v
+
 class AirLLMLlamaMlx:
 
     # customize layer names here
@@ -210,7 +262,7 @@ class AirLLMLlamaMlx:
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
                  hf_token=None, prefetching=True, test_nonlayered=False, show_memory_util=False,
-                 delete_original=False):
+                 delete_original=False, reuse_modules=True, compile_block=False):
 
         self.hf_token = hf_token
         self.set_layer_names_dict()
@@ -218,6 +270,10 @@ class AirLLMLlamaMlx:
         self.show_memory_util = show_memory_util
         self.least_available = None
         self.initial_available = psutil.virtual_memory().available / 1024 / 1024
+        # When True, allocate one TransformerBlock/Embedding/RMSNorm/Linear instance up-front
+        # and just .update() weights into it per layer. Skips ~66 Python instantiations per
+        # 3-token gen on a 22-layer model. See projects/kir-airllm/03-real-numbers.
+        self.reuse_modules = reuse_modules and not test_nonlayered
 
 
 
@@ -241,12 +297,77 @@ class AirLLMLlamaMlx:
 
         self.tokenizer = self.get_tokenizer(hf_token=hf_token)
 
+        if self.reuse_modules:
+            self._block = TransformerBlock(args=self.model_args)
+            self._embed = nn.Embedding(self.model_args.vocab_size, self.model_args.dim)
+            self._norm_mod = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
+            self._output_mod = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
+
+            # Convert to quantized variants. nn.quantize walks children and
+            # swaps eligible sub-modules in-place, so it works for the block
+            # (Linear children) but is a no-op on leaf modules — for those we
+            # construct QuantizedEmbedding / QuantizedLinear directly. Real
+            # weights arrive later via .update() in model_generate().
+            if compression == '4bit':
+                nn.quantize(self._block, bits=4, group_size=64)
+                self._embed = nn.QuantizedEmbedding(
+                    self.model_args.vocab_size, self.model_args.dim,
+                    group_size=64, bits=4,
+                )
+                self._output_mod = nn.QuantizedLinear(
+                    self.model_args.dim, self.model_args.vocab_size,
+                    bias=False, group_size=64, bits=4,
+                )
+
+        # mx.compile a *pure functional* block forward (block_forward_fn). Weights
+        # are passed as explicit args, so the compiled graph doesn't capture stale
+        # array references when self._block.update(weights) swaps in new weights.
+        # The naive `mx.compile(self._block.__call__)` produced gibberish output —
+        # MLX baked random-init weight refs into the trace.
+        # Note: incompatible with compression='4bit' — block_forward_fn does raw
+        # matmul, but QuantizedLinear weights are q-packed uint32. Use the regular
+        # nn.Module path (reuse_modules) for 4bit; QuantizedLinear is already fast.
+        self.compile_block = compile_block and self.reuse_modules and compression != '4bit'
+        if self.compile_block:
+            self._compiled_block_fn = mx.compile(block_forward_fn)
+            # cache constant ints/floats once
+            self._n_heads = self.model_args.n_heads
+            self._n_kv_heads = self.model_args.n_kv_heads
+            self._head_dim = self.model_args.head_dim
+            self._scale = self.model_args.head_dim ** -0.5
+            self._rope_theta = self.model_args.rope_theta
+            self._rope_traditional = self.model_args.rope_traditional
+            self._repeats = self._n_heads // self._n_kv_heads
+            self._norm_eps = self.model_args.norm_eps
+        else:
+            self._compiled_block_fn = None
+
 
     def get_tokenizer(self, hf_token=None):
         if hf_token is not None:
             return AutoTokenizer.from_pretrained(self.model_local_path, token=hf_token, trust_remote_code=True)
         else:
             return AutoTokenizer.from_pretrained(self.model_local_path, trust_remote_code=True)
+
+    def _call_compiled_block(self, x, use_causal_mask, cache):
+        """Extract current weights from self._block and invoke the compiled functional forward."""
+        b = self._block
+        if cache is None:
+            zero = mx.zeros((1,), dtype=x.dtype)
+            cache_k, cache_v, has_cache = zero, zero, False
+        else:
+            cache_k, cache_v = cache
+            has_cache = True
+        out, k, v = self._compiled_block_fn(
+            x, use_causal_mask, cache_k, cache_v, has_cache,
+            b.attention_norm.weight, b.ffn_norm.weight,
+            b.attention.wq.weight, b.attention.wk.weight,
+            b.attention.wv.weight, b.attention.wo.weight,
+            b.feed_forward.w1.weight, b.feed_forward.w2.weight, b.feed_forward.w3.weight,
+            self._n_heads, self._n_kv_heads, self._head_dim, self._scale,
+            self._rope_theta, self._rope_traditional, self._norm_eps,
+        )
+        return out, (k, v)
 
 
     def generate(self, x, temperature=0, max_new_tokens=None, **kwargs):
@@ -273,80 +394,94 @@ class AirLLMLlamaMlx:
         # save the caches in cache
 
         self.record_memory('before_tok_embeddings')
-        self.tok_embeddings = nn.Embedding(self.model_args.vocab_size, self.model_args.dim)
-        #w0 = self.tok_embeddings.weight[0][0]
-        mask = mask.astype(self.tok_embeddings.weight.dtype)
+        if self.reuse_modules:
+            embed_mod = self._embed
+        else:
+            embed_mod = nn.Embedding(self.model_args.vocab_size, self.model_args.dim)
+        mask = mask.astype(embed_mod.weight.dtype)
 
         self.record_memory('before_loading_tok')
         update_weights = ModelPersister.get_model_persister().load_model(self.layer_names_dict['embed'], self.checkpoint_path)
 
         self.record_memory('after_loading_tok')
-        self.tok_embeddings.update(update_weights['tok_embeddings'])
-        #w1 = self.tok_embeddings.weight[0][0]
+        embed_mod.update(update_weights['tok_embeddings'])
 
-        #assert w0 != w1, f"weight should change after updates, weights: {update_weights}"
-
-        x = self.tok_embeddings(x)
+        x = embed_mod(x)
         # force execution
         mx.eval(x)
 
-        if not self.test_nonlayered:
-
-            del self.tok_embeddings
-            gc.collect()
-        else:
+        if self.test_nonlayered:
             print(f"self.test_nonlayered:{self.test_nonlayered}, save layers")
             self.layers = []
+            self.tok_embeddings = embed_mod
+        elif not self.reuse_modules:
+            del embed_mod
+            gc.collect()
 
         self.record_memory('after_tok_embeddings')
-        #for l in self.layers:
 
         for il in tqdm(range(self.model_args.n_layers), desc='running layers'):
             self.record_memory(f'before layer {il}')
-            l = TransformerBlock(args=self.model_args)
+            if self.reuse_modules:
+                l = self._block
+            else:
+                l = TransformerBlock(args=self.model_args)
             l.update(
                 ModelPersister.get_model_persister().load_model(f'{self.layer_names_dict["layer_prefix"]}.{il}',
                                                                      self.checkpoint_path)['layers'][il]
             )
 
-            x, c = l(x, mask=mask)
+            if self.compile_block:
+                x, c = self._call_compiled_block(x, use_causal_mask=True, cache=None)
+            else:
+                x, c = l(x, mask=mask)
             # force execution
             mx.eval(x)
             # We store the per layer cache in a simple python list
             cache.append(c)
 
-            if not self.test_nonlayered:
+            if self.test_nonlayered:
+                self.layers.append(l)
+            elif not self.reuse_modules:
                 del l
                 gc.collect()
-            else:
-                self.layers.append(l)
             self.record_memory(f'after layer {il}')
 
         self.record_memory('before_norm')
-        self.norm = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
-        self.norm.update(
+        if self.reuse_modules:
+            norm_mod = self._norm_mod
+        else:
+            norm_mod = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
+        norm_mod.update(
             ModelPersister.get_model_persister().load_model(self.layer_names_dict['norm'], self.checkpoint_path)['norm']
         )
-        x = self.norm(x)
+        x = norm_mod(x)
         # force execution
         mx.eval(x)
-        if not self.test_nonlayered:
-            del self.norm
+        if self.test_nonlayered:
+            self.norm = norm_mod
+        elif not self.reuse_modules:
+            del norm_mod
             gc.collect()
         self.record_memory('after_norm')
 
         # We only care about the last logits that generate the next token
         self.record_memory('before_lmhead')
-        self.output = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
-        self.output.update(
+        if self.reuse_modules:
+            output_mod = self._output_mod
+        else:
+            output_mod = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
+        output_mod.update(
             ModelPersister.get_model_persister().load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output']
         )
-        y = self.output(x[:, -1])
+        y = output_mod(x[:, -1])
         # force execution
         mx.eval(y)
 
-        if not self.test_nonlayered:
-            del self.output
+        if self.test_nonlayered:
+            self.output = output_mod
+        elif not self.reuse_modules:
+            del output_mod
             gc.collect()
         self.record_memory('after_lmhead')
         y = sample(y)
@@ -369,68 +504,84 @@ class AirLLMLlamaMlx:
             # dimension of 1
             x = y[:, None]
 
-            if not self.test_nonlayered:
-                self.record_memory('before_tok_embeddings')
-                self.tok_embeddings = nn.Embedding(self.model_args.vocab_size, self.model_args.dim)
-                #w0 = self.tok_embeddings.weight[0][0]
-                self.tok_embeddings.update(
+            self.record_memory('before_tok_embeddings')
+            if self.reuse_modules:
+                embed_mod = self._embed
+                embed_mod.update(
                     ModelPersister.get_model_persister().load_model(self.layer_names_dict['embed'], self.checkpoint_path)['tok_embeddings'])
-                #w1 = self.tok_embeddings.weight[0][0]
-
-                #assert w0 != w1, f"weight should change after updates."
-            x = self.tok_embeddings(x)
+            elif self.test_nonlayered:
+                embed_mod = self.tok_embeddings
+            else:
+                embed_mod = nn.Embedding(self.model_args.vocab_size, self.model_args.dim)
+                embed_mod.update(
+                    ModelPersister.get_model_persister().load_model(self.layer_names_dict['embed'], self.checkpoint_path)['tok_embeddings'])
+            x = embed_mod(x)
 
             # force execution
             mx.eval(x)
-            if not self.test_nonlayered:
-                del self.tok_embeddings
+            if not self.test_nonlayered and not self.reuse_modules:
+                del embed_mod
                 gc.collect()
             self.record_memory('after_tok_embeddings')
 
             for i in tqdm(range(len(cache)), desc='running layers'):
-                self.record_memory(f'before layer {il}')
-                # We are overwriting the arrays in the cache list. When
-                # the computation will happen, MLX will be discarding the
-                # old cache the moment it is not needed anymore.
+                self.record_memory(f'before layer {i}')
 
-                if not self.test_nonlayered:
+                if self.reuse_modules:
+                    l = self._block
+                    l.update(ModelPersister.get_model_persister().load_model(f'{self.layer_names_dict["layer_prefix"]}.{i}',
+                                                                             self.checkpoint_path)['layers'][i])
+                elif self.test_nonlayered:
+                    l = self.layers[i]
+                else:
                     l = TransformerBlock(args=self.model_args)
                     l.update(ModelPersister.get_model_persister().load_model(f'{self.layer_names_dict["layer_prefix"]}.{i}',
                                                                              self.checkpoint_path)['layers'][i])
-                else:
-                    l = self.layers[i]
 
-                x, cache[i] = l(x, mask=None, cache=cache[i])
+                if self.compile_block:
+                    x, cache[i] = self._call_compiled_block(x, use_causal_mask=False, cache=cache[i])
+                else:
+                    x, cache[i] = l(x, mask=None, cache=cache[i])
                 # force execution
                 mx.eval(x)
-                if not self.test_nonlayered:
+                if not self.test_nonlayered and not self.reuse_modules:
                     del l
                     gc.collect()
-                self.record_memory(f'after layer {il}')
+                self.record_memory(f'after layer {i}')
 
             self.record_memory('before_norm')
-            if not self.test_nonlayered:
-                self.norm = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
-                self.norm.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['norm'], self.checkpoint_path)['norm'])
-            x = self.norm(x)
+            if self.reuse_modules:
+                norm_mod = self._norm_mod
+                norm_mod.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['norm'], self.checkpoint_path)['norm'])
+            elif self.test_nonlayered:
+                norm_mod = self.norm
+            else:
+                norm_mod = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
+                norm_mod.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['norm'], self.checkpoint_path)['norm'])
+            x = norm_mod(x)
             # force execution
             mx.eval(x)
 
-            if not self.test_nonlayered:
-                del self.norm
+            if not self.test_nonlayered and not self.reuse_modules:
+                del norm_mod
                 gc.collect()
 
             self.record_memory('after_norm')
 
-            if not self.test_nonlayered:
-                self.output = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
-                self.output.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output'])
-            y = sample(self.output(x[:, -1]))
+            if self.reuse_modules:
+                output_mod = self._output_mod
+                output_mod.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output'])
+            elif self.test_nonlayered:
+                output_mod = self.output
+            else:
+                output_mod = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
+                output_mod.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output'])
+            y = sample(output_mod(x[:, -1]))
 
             # force execution
             mx.eval(y)
-            if not self.test_nonlayered:
-                del self.output
+            if not self.test_nonlayered and not self.reuse_modules:
+                del output_mod
                 gc.collect()
 
             self.record_memory('after_lmhead')
