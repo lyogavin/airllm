@@ -255,6 +255,19 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     n_shards = len(set(index.values()))
     state_dict = {}
 
+    # Build mapping from shard number to actual filename from the index,
+    # instead of hardcoding filename patterns (fixes models with non-standard
+    # zero-padding like DeepSeek, see #214)
+    shard_to_filename = {}
+    for filename in set(index.values()):
+        parts = filename.split('-')
+        if len(parts) > 1:
+            try:
+                shard_num = int(parts[1])
+                shard_to_filename[shard_num] = filename
+            except ValueError:
+                pass
+
 
     if not os.path.exists(saving_path):
         #os.makedirs(saving_path)
@@ -271,20 +284,13 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
             if max(shards) > shard:
                 # optinoally delete original file
                 if delete_original and shard != 0:
-                    if not safetensors_format:
-                        to_delete = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
-                    else:
-                        to_delete = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
-
+                    to_delete = checkpoint_path / shard_to_filename[shard]
                     print(f"deleting original file: {to_delete}")
                     remove_real_and_linked_file(to_delete)
                 shard += 1
                 print(f'Loading shard {shard}/{n_shards}')
 
-                if not safetensors_format:
-                    to_load = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
-                else:
-                    to_load = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
+                to_load = checkpoint_path / shard_to_filename[shard]
 
                 # check if to_load exist, if not downloaad it...
                 if not os.path.exists(to_load):
