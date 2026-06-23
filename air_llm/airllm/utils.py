@@ -140,6 +140,10 @@ def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None
     if layer_shards_saving_path is not None:
         for saved_split_file in glob(str(Path(layer_shards_saving_path) / splitted_model_dir_name / '*')):
             total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
+    else:
+        # When layer_shards_saving_path is None, check for existing split files in checkpoint_path
+        for saved_split_file in glob(str(Path(checkpoint_path) / splitted_model_dir_name / '*')):
+            total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
 
     if compression == '4bit':
         total_shard_files_size_bytes = int(total_shard_files_size_bytes / 0.2813)
