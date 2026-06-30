@@ -1,15 +1,25 @@
+import os
 import setuptools
 
-# Windows uses a different default encoding (use a consistent encoding)
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+here = os.path.abspath(os.path.dirname(__file__))
+
+# The single source of truth for the README is the repository's top-level README.md. The release
+# workflow copies it next to this setup.py before building, so it ships in both the sdist and the
+# wheel; for a plain local checkout we fall back to the copy one directory up.
+long_description = ""
+for _readme in (os.path.join(here, "README.md"), os.path.join(here, os.pardir, "README.md")):
+    if os.path.exists(_readme):
+        with open(_readme, "r", encoding="utf-8") as fh:
+            long_description = fh.read()
+        break
 
 setuptools.setup(
     name="airllm",
     version="3.0.0",
     author="Gavin Li",
     author_email="gavinli@animaai.cloud",
-    description="AirLLM allows single 4GB GPU card to run 70B large language models without quantization, distillation or pruning. 8GB vmem to run 405B Llama3.1.",
+    description="AirLLM runs 70B large language models on a single 4GB GPU without quantization, "
+                "distillation or pruning. 405B Llama 3.1 on 8GB, DeepSeek-V3 671B on ~12GB.",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/lyogavin/airllm",

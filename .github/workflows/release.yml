@@ -1,0 +1,66 @@
+name: Publish to PyPI
+
+# Publishes the `airllm` package to PyPI whenever a GitHub Release is published.
+# Uses PyPI Trusted Publishing (OIDC) — no API tokens stored in the repo.
+#
+# To cut a release:
+#   1. Bump `version=` in air_llm/setup.py and commit.
+#   2. Create a GitHub Release whose tag matches that version (e.g. tag "3.0.1" or "v3.0.1").
+# The version guard below fails the run if the tag and setup.py version disagree.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build only, do not publish to PyPI"
+        type: boolean
+        default: true
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # required for PyPI Trusted Publishing (OIDC)
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Ship the current top-level README inside the package
+        run: cp README.md air_llm/README.md
+
+      - name: Verify release tag matches setup.py version
+        if: github.event_name == 'release'
+        run: |
+          PKG_VERSION=$(cd air_llm && python -c "import re,pathlib;print(re.search(r'version=\"([^\"]+)\"', pathlib.Path('setup.py').read_text()).group(1))")
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "setup.py version: $PKG_VERSION"
+          echo "release tag:      $TAG"
+          if [ "$PKG_VERSION" != "$TAG" ]; then
+            echo "::error::Release tag '$TAG' does not match setup.py version '$PKG_VERSION'. Bump setup.py or fix the tag."
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        run: |
+          cd air_llm
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Check distribution metadata
+        run: |
+          cd air_llm
+          python -m pip install --upgrade twine
+          twine check dist/*
+
+      - name: Publish to PyPI
+        if: github.event_name == 'release' || inputs.dry_run == false
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: air_llm/dist
