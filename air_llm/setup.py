@@ -15,7 +15,7 @@ for _readme in (os.path.join(here, "README.md"), os.path.join(here, os.pardir, "
 
 setuptools.setup(
     name="airllm",
-    version="3.0.0",
+    version="3.0.1",
     author="Gavin Li",
     author_email="gavinli@animaai.cloud",
     description="AirLLM runs 70B large language models on a single 4GB GPU without quantization, "
@@ -34,6 +34,7 @@ setuptools.setup(
         'safetensors',
         'huggingface-hub',
         'scipy',
+        'sentencepiece',
         # 'bitsandbytes' is optional (used only for --compression); we fall back gracefully when absent.
     ],
     classifiers=[
