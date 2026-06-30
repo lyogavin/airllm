@@ -7,6 +7,10 @@ name: Publish to PyPI
 #   1. Bump `version=` in air_llm/setup.py and commit.
 #   2. Create a GitHub Release whose tag matches that version (e.g. tag "3.0.1" or "v3.0.1").
 # The version guard below fails the run if the tag and setup.py version disagree.
+#
+# The build runs in its own job with no environment, so the build-only dry-run
+# (Run workflow -> "Build only") never touches the protected `pypi` environment.
+# Only the separate publish job is environment-gated and runs on real releases.
 
 on:
   release:
@@ -19,12 +23,8 @@ on:
         default: true
 
 jobs:
-  build-and-publish:
+  build:
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write   # required for PyPI Trusted Publishing (OIDC)
-      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -59,8 +59,29 @@ jobs:
           python -m pip install --upgrade twine
           twine check dist/*
 
+      - name: Upload built distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: air_llm/dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Only publish on a real GitHub Release, or an explicit non-dry-run manual dispatch.
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
+    environment: pypi
+    permissions:
+      id-token: write   # required for PyPI Trusted Publishing (OIDC)
+      contents: read
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
       - name: Publish to PyPI
-        if: github.event_name == 'release' || inputs.dry_run == false
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: air_llm/dist
+          packages-dir: dist
