@@ -1,0 +1,43 @@
+name: Refresh Star History
+
+# Regenerates assets/star-history.svg daily and commits it if it changed.
+# The README embeds the committed image (not the live API), so the chart always
+# renders even when star-history.com's anonymous API is rate-limited. The guard
+# below ensures a rate-limited/error response never overwrites a good image.
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # daily at 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download latest star-history chart
+        run: |
+          set -e
+          mkdir -p assets
+          url="https://api.star-history.com/svg?repos=lyogavin/airllm&type=Timeline"
+          tmp="$(mktemp)"
+          code=$(curl -sS -A "Mozilla/5.0 (github-actions star-history refresh)" -o "$tmp" -w "%{http_code}" "$url" || echo "000")
+          size=$(wc -c < "$tmp" | tr -d ' ')
+          echo "HTTP $code, ${size} bytes"
+          # Only update when we got a real SVG — guards against rate-limit/error pages.
+          if [ "$code" = "200" ] && head -c 5 "$tmp" | grep -q "<svg" && [ "$size" -gt 5000 ]; then
+            mv "$tmp" assets/star-history.svg
+            echo "Chart updated."
+          else
+            echo "Did not get a valid SVG (likely rate-limited); keeping the existing image."
+            rm -f "$tmp"
+          fi
+
+      - name: Commit if changed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: refresh star history chart"
+          file_pattern: assets/star-history.svg

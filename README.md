@@ -59,7 +59,7 @@
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=lyogavin/airllm&type=Timeline)](https://star-history.com/#lyogavin/airllm&Timeline)
+[![Star History Chart](assets/star-history.svg)](https://star-history.com/#lyogavin/airllm&Timeline)
 
 ## Table of Contents
 
