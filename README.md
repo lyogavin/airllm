@@ -59,7 +59,12 @@
 
 ## Star History
 
-[![Star History Chart](assets/star-history.png)](https://star-history.com/#lyogavin/airllm&Timeline)
+<a href="https://star-history.com/#lyogavin/airllm&Timeline">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/star-history-dark.png">
+    <img alt="Star History Chart" src="assets/star-history.png">
+  </picture>
+</a>
 
 ## Table of Contents
 

@@ -26,13 +26,15 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade matplotlib
 
-      - name: Generate star history chart
+      - name: Generate star history charts (light + dark)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python scripts/gen_star_history.py "${{ github.repository }}" assets/star-history.png
+        run: |
+          python scripts/gen_star_history.py "${{ github.repository }}" assets/star-history.png light
+          python scripts/gen_star_history.py "${{ github.repository }}" assets/star-history-dark.png dark
 
       - name: Commit if changed
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore: refresh star history chart"
-          file_pattern: assets/star-history.png
+          file_pattern: "assets/star-history.png assets/star-history-dark.png"

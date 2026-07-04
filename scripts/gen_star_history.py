@@ -7,7 +7,9 @@ so it works reliably for repos with tens of thousands of stars. Output is a PNG,
 always renders in GitHub markdown.
 
 Usage:
-    GITHUB_TOKEN=... python scripts/gen_star_history.py [owner/repo] [output.png]
+    GITHUB_TOKEN=... python scripts/gen_star_history.py [owner/repo] [output.png] [theme]
+
+theme is "light" (default) or "dark".
 """
 import datetime
 import json
@@ -18,9 +20,15 @@ import urllib.request
 
 REPO = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("REPO", "lyogavin/airllm")
 OUT = sys.argv[2] if len(sys.argv) > 2 else "assets/star-history.png"
+THEME = (sys.argv[3] if len(sys.argv) > 3 else os.environ.get("THEME", "light")).lower()
 TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
 PER_PAGE = 100
 MAX_SAMPLES = 30
+
+THEMES = {
+    "light": {"bg": "#ffffff", "fg": "#24292f", "grid": "#d0d7de", "line": "#e34a4a"},
+    "dark": {"bg": "#0d1117", "fg": "#c9d1d9", "grid": "#30363d", "line": "#ff6b6b"},
+}
 
 
 def gh(url, accept="application/vnd.github+json"):
@@ -73,20 +81,27 @@ def main():
     xs = [d for d, _ in points]
     ys = [c for _, c in points]
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(xs, ys, color="#e34a4a", linewidth=2.5, marker="o", markersize=4)
-    plt.fill_between(xs, ys, color="#e34a4a", alpha=0.08)
-    plt.title(f"Star History — {REPO}", fontsize=15)
-    plt.ylabel("GitHub Stars", fontsize=12)
-    plt.xlabel("Date", fontsize=12)
-    plt.grid(True, alpha=0.3)
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
-    plt.gcf().autofmt_xdate()
-    plt.tight_layout()
+    c = THEMES.get(THEME, THEMES["light"])
+    fig, ax = plt.subplots(figsize=(10, 6))
+    fig.patch.set_facecolor(c["bg"])
+    ax.set_facecolor(c["bg"])
+
+    ax.plot(xs, ys, color=c["line"], linewidth=2.5, marker="o", markersize=4)
+    ax.fill_between(xs, ys, color=c["line"], alpha=0.10)
+    ax.set_title(f"Star History — {REPO}", fontsize=15, color=c["fg"])
+    ax.set_ylabel("GitHub Stars", fontsize=12, color=c["fg"])
+    ax.set_xlabel("Date", fontsize=12, color=c["fg"])
+    ax.grid(True, alpha=0.3, color=c["grid"])
+    ax.tick_params(colors=c["fg"])
+    for spine in ax.spines.values():
+        spine.set_color(c["grid"])
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    fig.autofmt_xdate()
+    fig.tight_layout()
 
     os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
-    plt.savefig(OUT, dpi=130)
-    print(f"wrote {OUT}: {len(points)} points, {total} stars")
+    fig.savefig(OUT, dpi=130, facecolor=c["bg"])
+    print(f"wrote {OUT} ({THEME}): {len(points)} points, {total} stars")
 
 
 if __name__ == "__main__":
