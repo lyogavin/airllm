@@ -28,7 +28,7 @@
 
 * [Best AI Facial Expression Editor](https://crazyfaceai.com)
 
-* [Bloome — build & run AI agent teams in the cloud, zero setup](https://bloome.im/login?ref=G6BYnov0)
+* [Bloome — build & run AI agent teams in the cloud, zero setup](https://bloome.im/app?ref=G6BYnov0&utm_medium=github&utm_source=lyogavin-airllm-ivor-202606)
 
 ## Updates
 [2026/06] **v3.0**: FP8 model support + the latest models. Run **DeepSeek-V3 (671B) on ~12GB** and **Qwen3-235B on ~3GB**, plus Qwen3, Llama 3.x/4, DeepSeek V2/V3, Phi-4, Gemma and more — all through a single `AutoModel`.
@@ -363,7 +363,7 @@ BibTex entry:
 
 ## Sponsors
 
-<a href="https://bloome.im/login?ref=G6BYnov0">
+<a href="https://bloome.im/app?ref=G6BYnov0&utm_medium=github&utm_source=lyogavin-airllm-ivor-202606">
   <img src="https://github.com/lyogavin/airllm/blob/main/assets/bloome.png?raw=true" alt="Bloome — Run AI Agent Teams in the Cloud" width="50%" />
 </a>
 
@@ -371,7 +371,7 @@ BibTex entry:
 
 Bloome is an AI-agent IM platform: build and run AI agent teams in the cloud with zero setup. Add a skill as an agent in a group chat, run it in one click from web or mobile, and share it with your team — think of it as a group chat where your AI assistants are teammates you can @mention and assign tasks to.
 
-👉 Try Bloome: https://bloome.im/login?ref=G6BYnov0
+👉 Try [Bloome](https://bloome.im/app?ref=G6BYnov0&utm_medium=github&utm_source=lyogavin-airllm-ivor-202606)
 
 
 ## Contribution 
