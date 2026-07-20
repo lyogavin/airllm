@@ -16,6 +16,7 @@ import json
 import math
 import os
 import sys
+import urllib.error
 import urllib.request
 
 REPO = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("REPO", "lyogavin/airllm")
@@ -36,8 +37,23 @@ def gh(url, accept="application/vnd.github+json"):
     if TOKEN:
         headers["Authorization"] = f"Bearer {TOKEN}"
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        try:
+            msg = json.loads(body).get("message", body)
+        except json.JSONDecodeError:
+            msg = body
+        hint = ""
+        if e.code == 403 and "stargazers" in url:
+            hint = (
+                "\nGitHub restricts /stargazers to admins/collaborators; the "
+                "Actions GITHUB_TOKEN cannot access it. Use a collaborator PAT "
+                "via the STAR_HISTORY_TOKEN secret."
+            )
+        raise SystemExit(f"GitHub API {e.code} for {url}: {msg}{hint}") from e
 
 
 def main():
