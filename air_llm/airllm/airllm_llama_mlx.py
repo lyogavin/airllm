@@ -15,7 +15,7 @@ from .persist import ModelPersister
 import psutil
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, AutoModel, GenerationMixin, LlamaForCausalLM, GenerationConfig
 from .utils import clean_memory, load_layer, \
-    find_or_create_local_splitted_path
+    find_or_create_local_splitted_path, load_prefer_no_remote_code
 
 
 
@@ -227,10 +227,9 @@ class AirLLMLlamaMlx:
                                                                                          layer_names=self.layer_names_dict,
                                                                                          hf_token=hf_token,
                                                                                          delete_original=delete_original)
-        if hf_token is not None:
-            self.config = AutoConfig.from_pretrained(self.model_local_path, token=hf_token, trust_remote_code=True)
-        else:
-            self.config = AutoConfig.from_pretrained(self.model_local_path, trust_remote_code=True)
+        token_kwargs = {'token': hf_token} if hf_token is not None else {}
+        self.config = load_prefer_no_remote_code(
+            AutoConfig.from_pretrained, self.model_local_path, **token_kwargs)
 
 
         self.model_args = get_model_args_from_config(self.config)
@@ -243,10 +242,9 @@ class AirLLMLlamaMlx:
 
 
     def get_tokenizer(self, hf_token=None):
-        if hf_token is not None:
-            return AutoTokenizer.from_pretrained(self.model_local_path, token=hf_token, trust_remote_code=True)
-        else:
-            return AutoTokenizer.from_pretrained(self.model_local_path, trust_remote_code=True)
+        token_kwargs = {'token': hf_token} if hf_token is not None else {}
+        return load_prefer_no_remote_code(
+            AutoTokenizer.from_pretrained, self.model_local_path, **token_kwargs)
 
 
     def generate(self, x, temperature=0, max_new_tokens=None, **kwargs):

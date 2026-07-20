@@ -82,6 +82,24 @@ def clean_memory():
     torch.cuda.empty_cache()
 
 
+def load_prefer_no_remote_code(loader, *args, **kwargs):
+    """
+    Call a transformers ``from_pretrained``-style loader, preferring transformers' native
+    implementation and only trusting the model's bundled remote code when the native load fails.
+
+    AirLLM's advertised entry point is an arbitrary Hugging Face repo id, so a normal load of a
+    standard architecture should not execute Python shipped in the repo. Standard models load fine
+    with ``trust_remote_code=False``; only models that genuinely ship custom code (ChatGLM, Baichuan,
+    some Qwen) raise without it, so we fall back to ``trust_remote_code=True`` for those. This mirrors
+    how ``AirLLMBaseModel`` already loads the model config/weights, and keeps every load boundary
+    (config, tokenizer, model) consistent instead of hard-coding ``trust_remote_code=True``.
+    """
+    try:
+        return loader(*args, trust_remote_code=False, **kwargs)
+    except Exception:
+        return loader(*args, trust_remote_code=True, **kwargs)
+
+
 def uncompress_layer_state_dict(layer_state_dict):
     uncompressed_layer_state_dict = None
     if any(['4bit' in k for k in layer_state_dict.keys()]):

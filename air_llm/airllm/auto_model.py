@@ -2,6 +2,8 @@ import importlib
 from transformers import AutoConfig
 from sys import platform
 
+from .utils import load_prefer_no_remote_code
+
 is_on_mac_os = False
 
 if platform == "darwin":
@@ -33,11 +35,11 @@ class AutoModel:
 
     @classmethod
     def get_module_class(cls, pretrained_model_name_or_path, *inputs, **kwargs):
-        if 'hf_token' in kwargs:
-            config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True,
-                                                token=kwargs['hf_token'])
-        else:
-            config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True)
+        token_kwargs = {'token': kwargs['hf_token']} if 'hf_token' in kwargs else {}
+        # Prefer transformers' native config; only run the repo's remote code if it's actually
+        # required to parse the config (custom architectures). See load_prefer_no_remote_code.
+        config = load_prefer_no_remote_code(
+            AutoConfig.from_pretrained, pretrained_model_name_or_path, **token_kwargs)
 
         architectures = getattr(config, "architectures", None) or []
         arch = architectures[0] if architectures else ""

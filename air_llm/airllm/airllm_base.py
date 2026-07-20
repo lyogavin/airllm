@@ -14,7 +14,7 @@ from transformers.quantizers import AutoHfQuantizer
 from .profiler import LayeredProfiler
 
 from .utils import clean_memory, load_layer, \
-    find_or_create_local_splitted_path
+    find_or_create_local_splitted_path, load_prefer_no_remote_code
 
 try:
     import bitsandbytes as bnb
@@ -168,10 +168,11 @@ class AirLLMBaseModel:
             return GenerationConfig()
 
     def get_tokenizer(self, hf_token=None):
-        if hf_token is not None:
-            return AutoTokenizer.from_pretrained(self.model_local_path, token=hf_token, trust_remote_code=True)
-        else:
-            return AutoTokenizer.from_pretrained(self.model_local_path, trust_remote_code=True)
+        token_kwargs = {'token': hf_token} if hf_token is not None else {}
+        # Prefer transformers' native tokenizer; only trust the repo's remote code if it's required
+        # (custom tokenizers). Matches how the config/model are loaded above.
+        return load_prefer_no_remote_code(
+            AutoTokenizer.from_pretrained, self.model_local_path, **token_kwargs)
 
     # ---- model construction -----------------------------------------------------------------
 
