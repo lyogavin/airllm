@@ -176,12 +176,17 @@ def compress_layer_state_dict(layer_state_dict, compression=None):
     return compressed_layer_state_dict if compressed_layer_state_dict is not None else layer_state_dict
 
 def remove_real_and_linked_file(to_delete):
-    if (os.path.realpath(to_delete) != to_delete):
-        targetpath = os.path.realpath(to_delete)
+    # Only resolve+remove a link target when to_delete is actually a symlink (e.g. a HF cache
+    # snapshot file pointing at a blob). Comparing realpath(to_delete) != to_delete as strings
+    # also trips for perfectly normal files whose path just isn't already absolute/normalized
+    # (any relative path, or an absolute path with redundant components), which set targetpath
+    # to the same file under its resolved name and made the second os.remove() try to delete a
+    # file that the first call had already removed.
+    targetpath = os.path.realpath(to_delete) if os.path.islink(to_delete) else None
 
     os.remove(to_delete)
-    if (targetpath):
-         os.remove(targetpath)
+    if targetpath:
+        os.remove(targetpath)
 
 
 
