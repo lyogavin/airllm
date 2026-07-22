@@ -1,4 +1,6 @@
 import gc
+import importlib
+import importlib.util
 import json
 import os
 import ctypes
@@ -25,15 +27,98 @@ from safetensors.torch import load_file, save_file
 from .persist import ModelPersister
 
 
-try:
-    import bitsandbytes as bnb
+bnb = None
 
-    bitsandbytes_installed = True
-except ImportError:
-    bitsandbytes_installed = False
+
+def require_bitsandbytes():
+    """Return a usable bitsandbytes module or fail before model download starts."""
+    global bnb
+    if importlib.util.find_spec("bitsandbytes") is None:
+        raise ImportError("Compression requires bitsandbytes: `pip install bitsandbytes`")
+    if bnb is None:
+        bnb = importlib.import_module("bitsandbytes")
+    native_library = getattr(getattr(bnb, "cextension", None), "lib", None)
+    if native_library is None or type(native_library).__name__ == "ErrorHandlerMockBNBNativeLibrary":
+        raise ImportError(
+            "bitsandbytes is installed, but its native CUDA/ROCm library is unavailable for this platform. "
+            "Use a compatible wheel/build or a checkpoint that is already quantized."
+        )
+    return bnb
+
+
+def bitsandbytes_available():
+    try:
+        require_bitsandbytes()
+        return True
+    except (ImportError, RuntimeError):
+        return False
 
 
 import huggingface_hub
+
+
+COMPRESSION_SIZE_RATIOS = {
+    None: 1.0,
+    "8bit": 0.5,
+    # NF4 packs two values per byte and stores one fp32 absmax per 64 values.
+    "4bit": 0.2813,
+}
+
+
+def estimated_split_size_bytes(model_size_bytes, compression=None):
+    """Estimate the final layer-shard footprint for an AirLLM compression mode."""
+    if compression not in COMPRESSION_SIZE_RATIOS:
+        raise ValueError(f"Unsupported compression mode: {compression!r}")
+    return int(model_size_bytes * COMPRESSION_SIZE_RATIOS[compression])
+
+
+def checkpoint_total_size_bytes(checkpoint_path):
+    """Return checkpoint weight size, preferring index metadata when available.
+
+    Hugging Face downloads the index before the large weight files. Reading
+    ``metadata.total_size`` lets us reject an undersized offload volume before
+    hundreds of gigabytes have been downloaded.
+    """
+    checkpoint_path = Path(checkpoint_path)
+    for index_name in ("model.safetensors.index.json", "pytorch_model.bin.index.json"):
+        index_path = checkpoint_path / index_name
+        if index_path.exists():
+            with open(index_path, "rb") as f:
+                metadata = json.load(f).get("metadata", {})
+            total_size = metadata.get("total_size")
+            if total_size is not None:
+                return int(total_size)
+
+    total = 0
+    for pattern in ("*.safetensors", "*.bin"):
+        for model_file in checkpoint_path.glob(pattern):
+            total += model_file.stat().st_size
+    return total
+
+
+def checkpoint_quantization_method(checkpoint_path):
+    config_path = Path(checkpoint_path) / "config.json"
+    if not config_path.exists():
+        return None
+    with open(config_path, "rb") as f:
+        config = json.load(f)
+    text_config = config.get("text_config") or {}
+    quantization_config = config.get("quantization_config") or text_config.get("quantization_config")
+    if isinstance(quantization_config, dict):
+        return quantization_config.get("quant_method") or quantization_config.get("format") or "pre-quantized"
+    return None
+
+
+def configured_decoder_layer_count(checkpoint_path):
+    """Read the inference decoder count, excluding auxiliary MTP layers."""
+    config_path = Path(checkpoint_path) / "config.json"
+    if not config_path.exists():
+        return None
+    with open(config_path, "rb") as f:
+        config = json.load(f)
+    text_config = config.get("text_config") or {}
+    value = text_config.get("num_hidden_layers", config.get("num_hidden_layers"))
+    return int(value) if value is not None else None
 
 
 # replacement for bnb quantstat.as_dict(True), until the bug is fixed....
@@ -63,7 +148,8 @@ def save_quant_state_to_dict(self, packed=True):
 
     qs_packed_dict = {k: v for k, v in qs_dict.items() if isinstance(v, torch.Tensor)}
     non_tensor_dict = {k: v for k, v in qs_dict.items() if not isinstance(v, torch.Tensor)}
-    qs_packed_dict["quant_state." + "bitsandbytes__" + self.quant_type] = bnb.utils.pack_dict_to_tensor(non_tensor_dict)
+    bnb_module = require_bitsandbytes()
+    qs_packed_dict["quant_state." + "bitsandbytes__" + self.quant_type] = bnb_module.utils.pack_dict_to_tensor(non_tensor_dict)
     return qs_packed_dict
 
 
@@ -85,16 +171,18 @@ def clean_memory():
 def uncompress_layer_state_dict(layer_state_dict):
     uncompressed_layer_state_dict = None
     if any(['4bit' in k for k in layer_state_dict.keys()]):
+        bnb_module = require_bitsandbytes()
         uncompressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
             if '4bit' not in k:
                 quant_state_dict = {kk[len(k):]: kv for kk, kv in layer_state_dict.items() if kk.startswith(k) and k != kk}
-                quant_state = bnb.functional.QuantState.from_dict(qs_dict=quant_state_dict, device="cuda")
+                quant_state = bnb_module.functional.QuantState.from_dict(qs_dict=quant_state_dict, device="cuda")
 
-                dqv = bnb.functional.dequantize_nf4(v.cuda(), quant_state)
+                dqv = bnb_module.functional.dequantize_nf4(v.cuda(), quant_state)
                 uncompressed_layer_state_dict[k] = dqv
         del layer_state_dict
     elif any(['8bit' in k for k in layer_state_dict.keys()]):
+        bnb_module = require_bitsandbytes()
         uncompressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
             if '8bit' not in k:
@@ -102,8 +190,8 @@ def uncompress_layer_state_dict(layer_state_dict):
                 absmax = layer_state_dict[k + ".8bit.absmax"]
                 code = layer_state_dict[k + ".8bit.code"]
 
-                dqv = bnb.functional.dequantize_blockwise(v.cuda(),
-                                                          bnb.functional.QuantState(absmax=absmax.cuda(),
+                dqv = bnb_module.functional.dequantize_blockwise(v.cuda(),
+                                                          bnb_module.functional.QuantState(absmax=absmax.cuda(),
                                                                                     code=code.cuda(),
                                                                                     blocksize=2048,
                                                                                     dtype=torch.float16))
@@ -132,41 +220,43 @@ def load_layer(local_path, layer_name, profiling=False):
 
 
 def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None, splitted_model_dir_name='splitted_model'):
-    total_shard_files_size_bytes = 0
-    for model_shard_file in glob(str(checkpoint_path / '*')):
-        total_shard_files_size_bytes += os.path.getsize(model_shard_file)
+    checkpoint_path = Path(checkpoint_path)
+    total_shard_files_size_bytes = checkpoint_total_size_bytes(checkpoint_path)
+    required_split_size_bytes = estimated_split_size_bytes(total_shard_files_size_bytes, compression)
 
     total_saved_split_files_size_bytes = 0
     if layer_shards_saving_path is not None:
         for saved_split_file in glob(str(Path(layer_shards_saving_path) / splitted_model_dir_name / '*')):
             total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
 
-    if compression == '4bit':
-        total_shard_files_size_bytes = int(total_shard_files_size_bytes / 0.2813)
-    elif compression == '8bit':
-        total_shard_files_size_bytes = total_shard_files_size_bytes // 2
+    capacity_path = checkpoint_path if layer_shards_saving_path is None else Path(layer_shards_saving_path)
+    while not capacity_path.exists() and capacity_path != capacity_path.parent:
+        capacity_path = capacity_path.parent
+    if not capacity_path.exists():
+        raise FileNotFoundError(f"Offload volume does not exist: {layer_shards_saving_path}")
+    total, used, free = shutil.disk_usage(capacity_path)
 
-    total, used, free = shutil.disk_usage(checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path)
-
-    if free + total_saved_split_files_size_bytes < total_shard_files_size_bytes:
+    if free + total_saved_split_files_size_bytes < required_split_size_bytes:
         raise NotEnoughSpaceException(f"Not enough space. Free space under {checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path}:"  \
-                                      f" {free / 1024 / 1024 / 1024:.02f}GB. Model total size: {total_shard_files_size_bytes / 1024 / 1024 / 1024:.02f}GB. " \
+                                      f" {free / 1024 / 1024 / 1024:.02f}GB. Estimated split size: {required_split_size_bytes / 1024 / 1024 / 1024:.02f}GB. " \
                                       f"existing space under {checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path} assuming can reuse: {total_saved_split_files_size_bytes/ 1024 / 1024 / 1024:.02f}GB. "
                                       )
 
 def compress_layer_state_dict(layer_state_dict, compression=None):
     compressed_layer_state_dict = None
     if compression == '4bit':
+        bnb_module = require_bitsandbytes()
         compressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
-            v_quant, quant_state = bnb.functional.quantize_nf4(v.cuda(), blocksize=64)
+            v_quant, quant_state = bnb_module.functional.quantize_nf4(v.cuda(), blocksize=64)
             compressed_layer_state_dict[k] = v_quant
             for quant_state_k, quant_state_v in save_quant_state_to_dict(quant_state).items():
                 compressed_layer_state_dict[k + ".4bit." + quant_state_k] = quant_state_v
     elif compression == '8bit':
+        bnb_module = require_bitsandbytes()
         compressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
-            v_quant, quant_state = bnb.functional.quantize_blockwise(v.cuda(), blocksize=2048)
+            v_quant, quant_state = bnb_module.functional.quantize_blockwise(v.cuda(), blocksize=2048)
             absmax = quant_state.absmax.clone().contiguous()
             code = quant_state.code.clone().contiguous()
             compressed_layer_state_dict[k] = v_quant
@@ -176,23 +266,30 @@ def compress_layer_state_dict(layer_state_dict, compression=None):
     return compressed_layer_state_dict if compressed_layer_state_dict is not None else layer_state_dict
 
 def remove_real_and_linked_file(to_delete):
+    targetpath = None
     if (os.path.realpath(to_delete) != to_delete):
         targetpath = os.path.realpath(to_delete)
 
     os.remove(to_delete)
-    if (targetpath):
+    if targetpath and os.path.exists(targetpath):
          os.remove(targetpath)
 
 
 
 def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitted_model_dir_name='splitted_model',
-                          compression=None, layer_names=None, delete_original=False, repo_id=None, hf_token=None):
+                          compression=None, layer_names=None, delete_original=False, repo_id=None, hf_token=None,
+                          cache_dir=None):
     """
     Save the all layers of a model sharded checkpoint using safetensors.
     """
 
     if compression is not None:
-        assert bitsandbytes_installed, f"when using compression bitsandbytes has to be installed."
+        require_bitsandbytes()
+        quantization_method = checkpoint_quantization_method(checkpoint_path)
+        if quantization_method is not None:
+            raise ValueError(
+                f"AirLLM compression cannot be stacked on a pre-quantized checkpoint ({quantization_method})."
+            )
         splitted_model_dir_name = splitted_model_dir_name + "." + compression
 
     checkpoint_path = Path(checkpoint_path)
@@ -231,7 +328,10 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
             f"No model weights found under {checkpoint_path}. Expected one of: "
             f"model.safetensors(.index.json) or pytorch_model.bin(.index.json).")
 
-    if layer_names is None:
+    configured_layers = configured_decoder_layer_count(checkpoint_path)
+    if configured_layers is not None:
+        n_layers = configured_layers
+    elif layer_names is None:
         n_layers = len(set([int(k.split('.')[2]) for k in index.keys() if 'model.layers' in k]))
     else:
         n_layers = len(set([int(k[len(layer_names['layer_prefix']):].split('.')[1]) for k in index.keys() if layer_names['layer_prefix'] in k]))
@@ -269,8 +369,11 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         else:
             print(f"some layer splits found, some are not, re-save all layers in case there's some corruptions.")
 
-    if not delete_original:
-        check_space(checkpoint_path, layer_shards_saving_path, compression, splitted_model_dir_name=splitted_model_dir_name)
+    saving_path.mkdir(parents=True, exist_ok=True)
+
+    # The split itself must fit even when original checkpoint shards are deleted as we go.
+    check_space(checkpoint_path, layer_shards_saving_path, compression,
+                splitted_model_dir_name=splitted_model_dir_name)
 
 
     shard = 0
@@ -288,10 +391,6 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                 shard_num_to_file[int(parts[1])] = v
             except ValueError:
                 pass
-
-    if not os.path.exists(saving_path):
-        #os.makedirs(saving_path)
-        saving_path.mkdir(parents=True, exist_ok=True)
 
     single_modelfile = None
 
@@ -321,7 +420,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                 if not os.path.exists(to_load):
                     assert repo_id is not None
                     huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
-                                                    token=hf_token)
+                                                    token=hf_token, cache_dir=cache_dir)
 
                 if not safetensors_format:
                     state_dict.update(torch.load(to_load, map_location='cpu'))
@@ -336,7 +435,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
             if not os.path.exists(to_load):
                 assert repo_id is not None
                 huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
-                                                token=hf_token)
+                                                token=hf_token, cache_dir=cache_dir)
             if not safetensors_format:
                 state_dict.update(torch.load(to_load, map_location='cpu'))
             else:
@@ -366,11 +465,20 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         to_delete = checkpoint_path / single_modelfile
         print(f"deleting original file: {to_delete}")
         remove_real_and_linked_file(to_delete)
+    elif delete_original:
+        # The rolling deletion above removes a shard only when the next shard is
+        # opened. Remove the final shard (and any non-sequential leftovers) after
+        # every requested inference layer has been persisted successfully.
+        for checkpoint_file in set(index.values()):
+            to_delete = checkpoint_path / checkpoint_file
+            if to_delete.exists():
+                print(f"deleting original file: {to_delete}")
+                remove_real_and_linked_file(to_delete)
 
     return str(saving_path)
 
 def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards_saving_path=None, compression=None,
-                                       layer_names=None, hf_token=None, delete_original=False):
+                                       layer_names=None, hf_token=None, delete_original=False, cache_dir=None):
     """
     find the model's local cache path, download the cache if not exists, then split and save the model.
 
@@ -391,13 +499,22 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
         setting to '4bit' or '8bit' to enable compression from 16 bits to 4 bits/8 bits which speeed up 4x or 2x inference time with a tiny accuracy loss.
     hf_token: str, optional
         huggingface api token could be provided, by default None
+    cache_dir: str, optional
+        Hugging Face download cache. Set this together with
+        ``layer_shards_saving_path`` when the system drive is too small.
     """
 
     # try local model path, if the model exist split and save there
     if os.path.exists(model_local_path_or_repo_id):
-        if os.path.exists(Path(model_local_path_or_repo_id) / 'pytorch_model.bin.index.json') or \
-           os.path.exists(Path(model_local_path_or_repo_id) / 'model.safetensors.index.json'):
-            print(f"found index file...")
+        local_model_path = Path(model_local_path_or_repo_id)
+        local_weight_files = (
+            'pytorch_model.bin.index.json',
+            'model.safetensors.index.json',
+            'pytorch_model.bin',
+            'model.safetensors',
+        )
+        if any((local_model_path / filename).exists() for filename in local_weight_files):
+            print(f"found local model weights...")
             return Path(model_local_path_or_repo_id), split_and_save_layers(model_local_path_or_repo_id, layer_shards_saving_path,
                                                                             compression=compression, layer_names=layer_names, delete_original=delete_original)
         else:
@@ -408,6 +525,7 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
     # First grab everything except the (potentially huge) weight files. For multi-shard models the
     # index.json tells us the structure and we stream each shard on demand during splitting.
     hf_cache_path = huggingface_hub.snapshot_download(model_local_path_or_repo_id, token=hf_token,
+        cache_dir=cache_dir,
         #allow_patterns= ["model.safetensors.index.json", 'pytorch_model.bin.index.json'],
         ignore_patterns=['*.safetensors', '*.bin'])
 
@@ -418,6 +536,7 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
     if not has_index:
         hf_cache_path = huggingface_hub.snapshot_download(
             model_local_path_or_repo_id, token=hf_token,
+            cache_dir=cache_dir,
             allow_patterns=['model.safetensors', 'pytorch_model.bin'])
 
 
@@ -442,4 +561,5 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
     # if splitted_model subdir exists under cache use it, otherwise split and save
     return Path(hf_cache_path), split_and_save_layers(hf_cache_path, layer_shards_saving_path,
                                                       compression=compression, layer_names=layer_names,
-                                                      delete_original=delete_original, repo_id=model_local_path_or_repo_id, hf_token=hf_token)
+                                                      delete_original=delete_original, repo_id=model_local_path_or_repo_id,
+                                                      hf_token=hf_token, cache_dir=cache_dir)

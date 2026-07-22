@@ -14,15 +14,7 @@ from transformers.quantizers import AutoHfQuantizer
 from .profiler import LayeredProfiler
 
 from .utils import clean_memory, load_layer, \
-    find_or_create_local_splitted_path
-
-try:
-    import bitsandbytes as bnb
-
-    bitsandbytes_installed = True
-    print('>>>> bitsandbytes installed')
-except ImportError:
-    bitsandbytes_installed = False
+    find_or_create_local_splitted_path, require_bitsandbytes
 
 
 class AirLLMBaseModel:
@@ -49,7 +41,7 @@ class AirLLMBaseModel:
 
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
-                 hf_token=None, prefetching=True, delete_original=False):
+                 hf_token=None, prefetching=True, delete_original=False, cache_dir=None):
         """
         Parameters
         ----------
@@ -75,6 +67,9 @@ class AirLLMBaseModel:
             overlap the next layer's disk load with the current layer's compute
         delete_original: bool, optional
             delete the original downloaded checkpoint after splitting to save disk space
+        cache_dir: str, optional
+            Hugging Face download cache. For very large models, place this and
+            ``layer_shards_saving_path`` on a large local SSD.
         """
 
         self.profiling_mode = profiling_mode
@@ -85,14 +80,18 @@ class AirLLMBaseModel:
         self.total_compression_overhead_time = None
         self.hf_quantizer = None
 
-        if compression is not None and not bitsandbytes_installed:
-            raise ImportError('WARNING: bitsandbytes not found. Compression needs bitsandbytes. '
-                              'To use compression, please install bitsandbytes: `pip install bitsandbytes`')
+        if compression is not None:
+            require_bitsandbytes()
 
         self.compression = compression
         self.hf_token = hf_token
 
         self.set_layer_names_dict()
+
+        # Reject an unavailable accelerator before downloading or splitting a checkpoint.
+        self.running_device = device
+        self.device = torch.device(self.running_device)
+        self._validate_running_device()
 
         self.model_local_path, self.checkpoint_path = find_or_create_local_splitted_path(
             model_local_path_or_repo_id,
@@ -100,10 +99,8 @@ class AirLLMBaseModel:
             compression=compression,
             layer_names=self.layer_names_dict,
             hf_token=hf_token,
-            delete_original=delete_original)
-
-        self.running_device = device
-        self.device = torch.device(self.running_device)
+            delete_original=delete_original,
+            cache_dir=cache_dir)
 
         # Prefer transformers' native implementation; only trust the model's bundled remote code when
         # transformers doesn't recognize the architecture. Vendored remote code is frequently pinned
@@ -123,7 +120,9 @@ class AirLLMBaseModel:
         # on deep models (e.g. Qwen3-235B's 94 layers) and produces garbage; bf16's wider range
         # avoids it. Users can still override via dtype=.
         if dtype is None:
-            cfg_dtype = getattr(self.config, "torch_dtype", None)
+            cfg_dtype = getattr(self.config, "dtype", None)
+            if cfg_dtype is None:
+                cfg_dtype = getattr(self.config, "torch_dtype", None)
             if isinstance(cfg_dtype, str):
                 cfg_dtype = getattr(torch, cfg_dtype, None)
             dtype = cfg_dtype if isinstance(cfg_dtype, torch.dtype) else torch.float16
@@ -158,6 +157,20 @@ class AirLLMBaseModel:
 
         self.set_layers_from_layer_names()
         self._install_streaming_hooks()
+
+    def _validate_running_device(self):
+        if self.device.type != "cuda":
+            return
+        if not torch.cuda.is_available():
+            raise EnvironmentError(
+                f"Requested device {self.running_device!r}, but this PyTorch build has no available CUDA/ROCm device. "
+                "Install a GPU-enabled PyTorch build or pass device='cpu' before downloading model weights."
+            )
+        device_index = self.device.index or 0
+        if device_index >= torch.cuda.device_count():
+            raise EnvironmentError(
+                f"Requested device {self.running_device!r}, but only {torch.cuda.device_count()} CUDA/ROCm device(s) exist."
+            )
 
     # ---- customization hooks for subclasses -------------------------------------------------
 
@@ -194,10 +207,11 @@ class AirLLMBaseModel:
                     self.config, attn_implementation="eager", trust_remote_code=self.trust_remote_code)
 
         quantization_config = getattr(self.config, "quantization_config", None)
+        if quantization_config is None:
+            text_config = getattr(self.config, "text_config", None)
+            quantization_config = getattr(text_config, "quantization_config", None)
         if quantization_config is not None:
-            self.hf_quantizer = AutoHfQuantizer.from_config(quantization_config, pre_quantized=True)
-            device_map = self.hf_quantizer.update_device_map(None)
-            self.hf_quantizer.preprocess_model(model=self.model, device_map=device_map)
+            self.prepare_quantized_model(quantization_config)
 
         self.model.eval()
         self.model.tie_weights()
@@ -210,10 +224,14 @@ class AirLLMBaseModel:
             if buffer is not None and buffer.device.type != 'meta':
                 set_module_tensor_to_device(self.model, buffer_name, self.running_device, value=buffer)
 
-        # Force the model to report the running (cuda) device even though its parameters live on
-        # meta between layer executions, so transformers' generation utilities place inputs/cache
-        # tensors on the right device.
+        # Force the model to report the runtime device even though its streamed
+        # parameters live on meta between layer executions.
         self._patch_device_property()
+
+    def prepare_quantized_model(self, quantization_config):
+        self.hf_quantizer = AutoHfQuantizer.from_config(quantization_config, pre_quantized=True)
+        device_map = self.hf_quantizer.update_device_map(None)
+        self.hf_quantizer.preprocess_model(model=self.model, device_map=device_map)
 
     def _patch_device_property(self):
         running_device = torch.device(self.running_device)
@@ -289,7 +307,16 @@ class AirLLMBaseModel:
                 # accompanying weight_scale_inv, producing garbage. Only ordinary high-precision
                 # tensors get cast to the runtime dtype.
                 value = state_dict[param_name]
-                if value.dtype in (torch.float8_e4m3fn, torch.float8_e5m2) or param_name.endswith("_scale_inv"):
+                preserve_quantized_value = (
+                    self.hf_quantizer is not None
+                    and getattr(self.hf_quantizer, "pre_quantized", False)
+                )
+                if (
+                    preserve_quantized_value
+                    or not value.is_floating_point()
+                    or value.dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+                    or param_name.endswith(("_scale_inv", ".weight_scale", ".scale"))
+                ):
                     set_module_tensor_to_device(self.model, param_name, self.running_device, value=value)
                 else:
                     set_module_tensor_to_device(self.model, param_name, self.running_device,

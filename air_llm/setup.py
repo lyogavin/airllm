@@ -37,6 +37,18 @@ setuptools.setup(
         'sentencepiece',
         # 'bitsandbytes' is optional (used only for --compression); we fall back gracefully when absent.
     ],
+    extras_require={
+        'compression': ['bitsandbytes'],
+        'glm52': ['transformers>=5.12,<5.13'],
+        'kimi': ['compressed-tensors>=0.15.0', 'transformers>=4.57.1,<5.0.0'],
+        'server': ['fastapi>=0.115', 'uvicorn>=0.30'],
+    },
+    entry_points={
+        'console_scripts': [
+            'airllm-preflight=airllm.preflight:main',
+            'airllm-serve=airllm.server:main',
+        ],
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: Apache Software License",

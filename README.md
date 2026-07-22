@@ -169,6 +169,91 @@ When initialize the model, we support the following configurations:
 * **hf_token**: huggingface token can be provided here if downloading gated models like: *meta-llama/Llama-2-7b-hf*
 * **prefetching**: prefetching to overlap the model loading and compute. By default, turned on. For now, only AirLLMLlama2 supports this.
 * **delete_original**: if you don't have too much disk space, you can set delete_original to true to delete the original downloaded hugging face model, only keep the transformed one to save half of the disk space. 
+* **cache_dir**: optional Hugging Face download-cache path. For checkpoints larger than the system drive, put both `cache_dir` and `layer_shards_saving_path` on a large local SSD.
+
+### Preflight very large checkpoints
+
+Inspect the model config, weight index, layer layout and required offload capacity before downloading weight shards:
+
+```bash
+airllm-preflight --model zai-org/GLM-5.2-FP8 --offload-dir D:\\airllm-models
+airllm-preflight --model moonshotai/Kimi-K2.7-Code --offload-dir D:\\airllm-models
+```
+
+The GLM-5.2-FP8 checkpoint is about 704 GiB and Kimi-K2.7-Code is about 554 GiB before AirLLM's layer split. The split is approximately the same size for these already-quantized checkpoints. `delete_original=True` prevents retaining a second full checkpoint copy, but the final split still has to fit on the offload volume.
+
+For Kimi K2.5/K2.6/K2.7, install the packed-weight loader and use a dedicated environment whose Transformers version matches the model card:
+
+```bash
+pip install -e "./air_llm[kimi]"
+```
+
+GLM-5.2 uses Transformers 5.12, so keep GLM and Kimi in separate virtual environments:
+
+```bash
+pip install -e "./air_llm[glm52]"
+```
+
+The Kimi path is text-only. AirLLM rejects image or video inputs because the vision tower is not layer-streamed yet.
+Its published packed INT4 weights are kept packed while a layer is resident; AirLLM dequantizes one Linear projection at a time instead of allowing `compressed-tensors` to expand the whole model on first use.
+
+Example with an external local SSD:
+
+```python
+from airllm import AutoModel
+
+model = AutoModel.from_pretrained(
+    "zai-org/GLM-5.2-FP8",
+    cache_dir=r"D:\\airllm-cache",
+    layer_shards_saving_path=r"D:\\airllm-models",
+    delete_original=True,
+    prefetching=False,
+)
+```
+
+For GLM-5.2-FP8, AirLLM preserves the checkpoint's per-expert layout and uses a portable projection-at-a-time dequantization fallback. This works without the optional CUDA/Triton FP8 kernels, including on PyTorch ROCm, but is slower than optimized multi-GPU engines. Do not pass `compression="4bit"` or `compression="8bit"` to an already-quantized GLM or Kimi checkpoint.
+
+### Windows and AMD Radeon
+
+On Windows, enable UTF-8 before importing Kimi's `compressed-tensors` dependencies. Install the AMD-supported ROCm PyTorch build for the GPU architecture; RX 9070 XT is `gfx1201`:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+py -3.12 -m venv .venv-glm
+.\.venv-glm\Scripts\Activate.ps1
+python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "torch[device-gfx1201]==2.12.0+rocm7.14.0" "torchvision[device-gfx1201]==0.27.0+rocm7.14.0" "torchaudio==2.11.0+rocm7.14.0"
+python -m pip install -e ".\air_llm[glm52,server]"
+```
+
+Use a separate virtual environment for Kimi because its official remote code requires Transformers 4.x:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+py -3.12 -m venv .venv-kimi
+.\.venv-kimi\Scripts\Activate.ps1
+python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "torch[device-gfx1201]==2.12.0+rocm7.14.0" "torchvision[device-gfx1201]==0.27.0+rocm7.14.0" "torchaudio==2.11.0+rocm7.14.0"
+python -m pip install -e ".\air_llm[kimi,server]"
+```
+
+The current PyPI `bitsandbytes` Windows wheel may install without a usable ROCm native library. AirLLM now detects that case before downloading weights. Prefer the published FP8/INT4 checkpoints instead of AirLLM's optional bitsandbytes compression on this platform.
+
+### Local chat-completions API
+
+Install the optional server dependencies and start the non-streaming, text-only endpoint. It binds to localhost by default:
+
+```bash
+pip install -e "./air_llm[server]"
+airllm-serve --model zai-org/GLM-5.2-FP8 \
+  --cache-dir D:\\airllm-cache --offload-dir D:\\airllm-models --delete-original --no-prefetch
+```
+
+```bash
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"zai-org/GLM-5.2-FP8","messages":[{"role":"user","content":"Hello"}],"max_tokens":32}'
+```
+
+The API implements `GET /health`, `GET /v1/models`, and non-streaming `POST /v1/chat/completions`. AirLLM serializes requests because one model instance streams mutable layer state.
 
 ## MacOS
 

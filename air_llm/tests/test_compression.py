@@ -5,10 +5,15 @@ import torch
 sys.path.insert(0, '../airllm')
 
 from airllm import compress_layer_state_dict, uncompress_layer_state_dict
+from airllm.utils import bitsandbytes_available
 
 
 
 
+@unittest.skipUnless(
+    torch.cuda.is_available() and bitsandbytes_available(),
+    "compression round-trip requires a CUDA/ROCm device and bitsandbytes",
+)
 class TestCompression(unittest.TestCase):
     def setUp(self):
         pass

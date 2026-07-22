@@ -1,31 +1,45 @@
-import sys
 import unittest
-
-#sys.path.insert(0, '../airllm')
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from ..airllm.auto_model import AutoModel
 
 
-
 class TestAutoModel(unittest.TestCase):
-    def setUp(self):
-        pass
-    def tearDown(self):
-        pass
-
-    def test_auto_model_should_return_correct_model(self):
-        mapping_dict = {
-            'garage-bAInd/Platypus2-7B': 'AirLLMLlama2',
-            'Qwen/Qwen-7B': 'AirLLMQWen',
-            'internlm/internlm-chat-7b': 'AirLLMInternLM',
-            'THUDM/chatglm3-6b-base': 'AirLLMChatGLM',
-            'baichuan-inc/Baichuan2-7B-Base': 'AirLLMBaichuan',
-            'mistralai/Mistral-7B-Instruct-v0.1': 'AirLLMMistral',
-            'mistralai/Mixtral-8x7B-v0.1': 'AirLLMMixtral'
+    @patch("airllm.auto_model.AutoConfig.from_pretrained")
+    def test_custom_architectures_use_dedicated_streaming_layouts(self, from_pretrained):
+        cases = {
+            "ChatGLMForConditionalGeneration": "AirLLMChatGLM",
+            "QWenLMHeadModel": "AirLLMQWen",
+            "BaichuanForCausalLM": "AirLLMBaichuan",
+            "InternLMForCausalLM": "AirLLMInternLM",
+            "KimiK25ForConditionalGeneration": "AirLLMKimiK25",
+            "GlmMoeDsaForCausalLM": "AirLLMGlmMoeDsa",
         }
+        for architecture, expected in cases.items():
+            with self.subTest(architecture=architecture):
+                from_pretrained.return_value = SimpleNamespace(architectures=[architecture])
+                module, class_name = AutoModel.get_module_class("local-model")
+                self.assertEqual(module, "airllm")
+                self.assertEqual(class_name, expected)
 
+    @patch("airllm.auto_model.AutoConfig.from_pretrained")
+    def test_standard_and_new_architectures_use_generic_streaming(self, from_pretrained):
+        for architecture in ("LlamaForCausalLM", "UnknownForCausalLM"):
+            with self.subTest(architecture=architecture):
+                from_pretrained.return_value = SimpleNamespace(architectures=[architecture])
+                self.assertEqual(
+                    AutoModel.get_module_class("local-model"),
+                    ("airllm", "AirLLMBaseModel"),
+                )
 
-        for k,v in mapping_dict.items():
-            module, cls = AutoModel.get_module_class(k)
-            self.assertEqual(cls, v, f"expecting {v}")
-
+    @patch("airllm.auto_model.AutoConfig.from_pretrained")
+    def test_config_probe_uses_requested_cache(self, from_pretrained):
+        from_pretrained.return_value = SimpleNamespace(architectures=["LlamaForCausalLM"])
+        AutoModel.get_module_class("repo/model", cache_dir="D:/model-cache", hf_token="token")
+        from_pretrained.assert_called_once_with(
+            "repo/model",
+            trust_remote_code=True,
+            cache_dir="D:/model-cache",
+            token="token",
+        )

@@ -15,6 +15,7 @@ else:
     from .auto_model import AutoModel
     from .utils import split_and_save_layers
     from .utils import NotEnoughSpaceException
+    from .utils import compress_layer_state_dict, uncompress_layer_state_dict
 
     # Dedicated subclasses for a handful of custom-architecture models. Some of them pull in
     # optional extras (e.g. the Baichuan tokenizer needs `sentencepiece`). Import them defensively
@@ -31,6 +32,8 @@ else:
         ("AirLLMInternLM", ".airllm_internlm"),
         ("AirLLMMistral", ".airllm_mistral"),
         ("AirLLMMixtral", ".airllm_mixtral"),
+        ("AirLLMKimiK25", ".airllm_kimi_k25"),
+        ("AirLLMGlmMoeDsa", ".airllm_glm_moe_dsa"),
     ):
         try:
             _mod = __import__(__name__ + _module, fromlist=[_name])
