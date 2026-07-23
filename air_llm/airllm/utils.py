@@ -184,6 +184,54 @@ def remove_real_and_linked_file(to_delete):
          os.remove(targetpath)
 
 
+def _resolve_weight_map(checkpoint_path):
+    """
+    Pick which on-disk checkpoint to split and return ``(weight_map, safetensors_format)``.
+
+    Prefer safetensors over pickle-based ``pytorch_model.bin`` whenever both are present. safetensors
+    is the ecosystem default, is memory-mapped, and -- unlike a ``.bin`` file, which is a Python
+    pickle -- cannot execute arbitrary code when read. AirLLM's advertised entry point is an
+    arbitrary Hugging Face repo id, so a repo that ships both formats should never be unpickled just
+    because the pickle index happened to be checked first. We only fall back to ``.bin`` when no
+    safetensors weights exist. (The single-file branch already preferred safetensors; the multi-shard
+    branch used to check ``pytorch_model.bin.index.json`` first, which was both inconsistent with the
+    single-file branch and needlessly unsafe.)
+
+    ``weight_map`` maps each parameter name to the file that stores it. Multi-shard checkpoints ship
+    an ``index.json`` with this map; single-file checkpoints have no index, so synthesize one that
+    points every tensor at the lone file.
+    """
+    checkpoint_path = Path(checkpoint_path)
+
+    # 1. sharded safetensors
+    if os.path.exists(checkpoint_path / 'model.safetensors.index.json'):
+        with open(checkpoint_path / 'model.safetensors.index.json', 'rb') as f:
+            return json.load(f)['weight_map'], True
+
+    # 2. single-file safetensors
+    if os.path.exists(checkpoint_path / 'model.safetensors'):
+        from safetensors import safe_open
+        with safe_open(str(checkpoint_path / 'model.safetensors'), framework='pt') as f:
+            return {k: 'model.safetensors' for k in f.keys()}, True
+
+    # 3. sharded torch pickle
+    if os.path.exists(checkpoint_path / 'pytorch_model.bin.index.json'):
+        with open(checkpoint_path / 'pytorch_model.bin.index.json', 'rb') as f:
+            return json.load(f)['weight_map'], False
+
+    # 4. single-file torch pickle. weights_only=True restricts the unpickler to tensors and a safe
+    # allowlist, so reading the keys of an untrusted checkpoint can't run arbitrary code.
+    if os.path.exists(checkpoint_path / 'pytorch_model.bin'):
+        single_sd = torch.load(checkpoint_path / 'pytorch_model.bin', map_location='cpu',
+                               weights_only=True)
+        index = {k: 'pytorch_model.bin' for k in single_sd.keys()}
+        del single_sd
+        return index, False
+
+    raise FileNotFoundError(
+        f"No model weights found under {checkpoint_path}. Expected one of: "
+        f"model.safetensors(.index.json) or pytorch_model.bin(.index.json).")
+
 
 def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitted_model_dir_name='splitted_model',
                           compression=None, layer_names=None, delete_original=False, repo_id=None, hf_token=None):
@@ -204,32 +252,8 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         saving_path = Path(layer_shards_saving_path) / splitted_model_dir_name
 
 
-    # Build a weight_map (param name -> file that stores it). Multi-shard checkpoints ship an
-    # index.json; small/modern models often ship a single file with no index, so synthesize one.
-    safetensors_format = False
-    if os.path.exists(checkpoint_path / 'pytorch_model.bin.index.json'):
-        with open(checkpoint_path / 'pytorch_model.bin.index.json', 'rb') as f:
-            index = json.load(f)['weight_map']
-    elif os.path.exists(checkpoint_path / 'model.safetensors.index.json'):
-        safetensors_format = True
-        with open(checkpoint_path / 'model.safetensors.index.json', 'rb') as f:
-            index = json.load(f)['weight_map']
-    elif os.path.exists(checkpoint_path / 'model.safetensors'):
-        # single-file safetensors checkpoint: map every tensor to that one file
-        safetensors_format = True
-        from safetensors import safe_open
-        with safe_open(str(checkpoint_path / 'model.safetensors'), framework='pt') as f:
-            index = {k: 'model.safetensors' for k in f.keys()}
-    elif os.path.exists(checkpoint_path / 'pytorch_model.bin'):
-        # single-file torch checkpoint: map every tensor to that one file
-        safetensors_format = False
-        single_sd = torch.load(checkpoint_path / 'pytorch_model.bin', map_location='cpu')
-        index = {k: 'pytorch_model.bin' for k in single_sd.keys()}
-        del single_sd
-    else:
-        raise FileNotFoundError(
-            f"No model weights found under {checkpoint_path}. Expected one of: "
-            f"model.safetensors(.index.json) or pytorch_model.bin(.index.json).")
+    # Build a weight_map (param name -> file that stores it), preferring safetensors over pickle.
+    index, safetensors_format = _resolve_weight_map(checkpoint_path)
 
     if layer_names is None:
         n_layers = len(set([int(k.split('.')[2]) for k in index.keys() if 'model.layers' in k]))
@@ -324,7 +348,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                                                     token=hf_token)
 
                 if not safetensors_format:
-                    state_dict.update(torch.load(to_load, map_location='cpu'))
+                    state_dict.update(torch.load(to_load, map_location='cpu', weights_only=True))
                 else:
                     state_dict.update(load_file(to_load, device='cpu'))
 
@@ -338,7 +362,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                 huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
                                                 token=hf_token)
             if not safetensors_format:
-                state_dict.update(torch.load(to_load, map_location='cpu'))
+                state_dict.update(torch.load(to_load, map_location='cpu', weights_only=True))
             else:
                 state_dict.update(load_file(to_load, device='cpu'))
 
