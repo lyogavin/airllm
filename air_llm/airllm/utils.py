@@ -395,11 +395,17 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
 
     # try local model path, if the model exist split and save there
     if os.path.exists(model_local_path_or_repo_id):
-        if os.path.exists(Path(model_local_path_or_repo_id) / 'pytorch_model.bin.index.json') or \
-           os.path.exists(Path(model_local_path_or_repo_id) / 'model.safetensors.index.json'):
-            print(f"found index file...")
-            return Path(model_local_path_or_repo_id), split_and_save_layers(model_local_path_or_repo_id, layer_shards_saving_path,
-                                                                            compression=compression, layer_names=layer_names, delete_original=delete_original)
+        local_path = Path(model_local_path_or_repo_id)
+        # Recognize every checkpoint layout split_and_save_layers can handle: sharded (an index.json)
+        # *and* single-file (a lone model.safetensors / pytorch_model.bin, common for <=7B models).
+        # Previously only the index.json files were checked, so a local single-file model fell through
+        # to snapshot_download(local_path), which treats the path as a repo id and fails.
+        weight_files = ['model.safetensors.index.json', 'pytorch_model.bin.index.json',
+                        'model.safetensors', 'pytorch_model.bin']
+        if any(os.path.exists(local_path / f) for f in weight_files):
+            print(f"found local model weights...")
+            return local_path, split_and_save_layers(model_local_path_or_repo_id, layer_shards_saving_path,
+                                                      compression=compression, layer_names=layer_names, delete_original=delete_original)
         else:
             print(
                 f"Found local directory in {model_local_path_or_repo_id}, but didn't find downloaded model. Try using {model_local_path_or_repo_id} as a HF repo...")
