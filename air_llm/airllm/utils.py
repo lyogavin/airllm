@@ -141,8 +141,12 @@ def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None
         for saved_split_file in glob(str(Path(layer_shards_saving_path) / splitted_model_dir_name / '*')):
             total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
 
+    # Compression shrinks the on-disk split, so the space we need to reserve is a *fraction* of the
+    # original checkpoint size: ~0.28x for 4-bit (4/16 bits plus quant-state overhead) and ~0.5x for
+    # 8-bit. The 4-bit case previously divided by 0.2813, which inflated the estimate to ~3.55x the
+    # original size and made check_space raise NotEnoughSpaceException even when there was ample room.
     if compression == '4bit':
-        total_shard_files_size_bytes = int(total_shard_files_size_bytes / 0.2813)
+        total_shard_files_size_bytes = int(total_shard_files_size_bytes * 0.2813)
     elif compression == '8bit':
         total_shard_files_size_bytes = total_shard_files_size_bytes // 2
 
