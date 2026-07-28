@@ -20,6 +20,7 @@ if platform == "darwin":
 
 import torch
 import torch.nn as nn
+from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
 from .persist import ModelPersister
@@ -111,6 +112,25 @@ def uncompress_layer_state_dict(layer_state_dict):
         del layer_state_dict
 
     return layer_state_dict if uncompressed_layer_state_dict is None else uncompressed_layer_state_dict
+
+def layer_tensor_names(local_path, layer_name):
+    """List the tensors in a layer shard without reading any tensor data."""
+    with safe_open(str(Path(local_path) / (layer_name + ".safetensors")), framework="pt") as f:
+        return list(f.keys())
+
+
+def load_layer_subset(local_path, layer_name, keys):
+    """Read only `keys` from a layer shard.
+
+    safetensors can seek to individual tensors, so a single MoE expert costs its own few MB rather
+    than the whole ~16GB layer file. That is what makes per-expert streaming worthwhile.
+    """
+    out = {}
+    with safe_open(str(Path(local_path) / (layer_name + ".safetensors")), framework="pt") as f:
+        for k in keys:
+            out[k] = f.get_tensor(k)
+    return out
+
 
 def load_layer(local_path, layer_name, profiling=False):
     #layer_state_dict = load_file(Path(local_path) / (layer_name + ".safetensors"), device="cpu")
