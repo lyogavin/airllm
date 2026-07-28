@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, GenerationConfig
+from transformers.generation import GenerationMixin
 from accelerate import init_empty_weights
 from accelerate.utils.modeling import set_module_tensor_to_device
 from transformers.quantizers import AutoHfQuantizer
@@ -39,6 +40,10 @@ class AirLLMBaseModel:
     attention/rotary/cache details: new model architectures work as soon as transformers supports
     them.
     """
+
+    # Upper bound on how much pinned (page-locked) host memory a single prefetched layer may use.
+    # Layers larger than this are loaded into ordinary pageable memory instead.
+    max_pinned_layer_bytes = 2 * 1024 ** 3
 
     # Subclasses override this to point at non-standard module names.
     def set_layer_names_dict(self):
@@ -157,6 +162,7 @@ class AirLLMBaseModel:
         self.max_seq_len = max_seq_len
 
         self.set_layers_from_layer_names()
+        self._load_resident_modules()
         self._install_streaming_hooks()
 
     # ---- customization hooks for subclasses -------------------------------------------------
@@ -220,7 +226,16 @@ class AirLLMBaseModel:
         running_dtype = self.running_dtype
         base_cls = type(self.model)
 
-        class _AirLLMRuntimeModel(base_cls):
+        # transformers >= 4.50 removed GenerationMixin from PreTrainedModel, so model classes that
+        # predate that change (or ship as remote code, like Kimi K3's multimodal wrapper) no longer
+        # have .generate(). They still define prepare_inputs_for_generation, so mixing the class
+        # back in restores generation. It must come after the model class, per transformers.
+        extra_bases = () if isinstance(self.model, GenerationMixin) else (GenerationMixin,)
+        if extra_bases:
+            print(f"{base_cls.__name__} does not inherit GenerationMixin; mixing it in so "
+                  f"generate() works.")
+
+        class _AirLLMRuntimeModel(base_cls, *extra_bases):
             @property
             def device(self):
                 return running_device
@@ -270,8 +285,19 @@ class AirLLMBaseModel:
             state_dict = load_layer_output
 
         if self.prefetching and torch.cuda.is_available():
-            for k in state_dict.keys():
-                state_dict[k].pin_memory()
+            # pin_memory() returns a pinned copy rather than pinning in place, so the result has to
+            # be kept for the faster host->device copy to actually happen. Pinned memory can't be
+            # paged out, so we only spend it on layers small enough to be safe: a frontier MoE
+            # checkpoint has ~17GB layers, and with prefetching two are in flight at once, which
+            # would lock up ~34GB of RAM for a copy that is dwarfed by the disk read anyway.
+            total_bytes = sum(v.numel() * v.element_size() for v in state_dict.values())
+            if total_bytes <= self.max_pinned_layer_bytes:
+                try:
+                    for k in state_dict.keys():
+                        state_dict[k] = state_dict[k].pin_memory()
+                except RuntimeError:
+                    # Out of pinned memory: fall back to pageable, which is slower but always works.
+                    pass
 
         return state_dict
 
@@ -284,18 +310,37 @@ class AirLLMBaseModel:
                 self.hf_quantizer.create_quantized_param(self.model, state_dict[param_name], param_name,
                                                          self.running_device, state_dict)
             else:
-                # Normal load. Pre-quantized weights (fp8) and their block scales must be placed
-                # verbatim: casting an fp8 weight to fp16 silently drops the quantization and the
-                # accompanying weight_scale_inv, producing garbage. Only ordinary high-precision
-                # tensors get cast to the runtime dtype.
+                # Normal load. Only ordinary high-precision tensors get cast to the runtime dtype;
+                # pre-quantized payloads must be placed verbatim (see _should_load_verbatim).
                 value = state_dict[param_name]
-                if value.dtype in (torch.float8_e4m3fn, torch.float8_e5m2) or param_name.endswith("_scale_inv"):
+                if self._should_load_verbatim(param_name, value):
                     set_module_tensor_to_device(self.model, param_name, self.running_device, value=value)
                 else:
                     set_module_tensor_to_device(self.model, param_name, self.running_device,
                                                 value=value, dtype=self.running_dtype)
             moved.append(param_name)
         return moved
+
+    # Suffixes of the companion tensors that pre-quantized checkpoints ship alongside a weight
+    # (fp8 block scales, compressed-tensors/MXFP4 packed payloads and their scales, GPTQ indices).
+    _QUANT_COMPANION_SUFFIXES = ("_scale", "_scale_inv", "_packed", "_zero_point", "_g_idx", "_shape")
+
+    def _should_load_verbatim(self, param_name, value):
+        """Whether a checkpoint tensor must be placed on the device without a dtype cast.
+
+        Casting a pre-quantized payload to the runtime dtype destroys it: an fp8 weight loses its
+        quantization, and a 4-bit MXFP4 ``weight_packed`` tensor (stored as packed integers) becomes
+        meaningless floats. Equally important for very large models, decompressing on load would
+        multiply a layer's footprint by ~4x, which is what keeps Kimi-K3-class checkpoints from
+        fitting on a single GPU. So we keep anything that isn't a plain high-precision float as-is.
+        """
+        if not value.is_floating_point():
+            # Packed 4-bit payloads, zero points, g_idx, shape metadata.
+            return True
+        if value.element_size() == 1:
+            # Any 8-bit float: fp8 e4m3/e5m2 weights, and the e8m0 scales MXFP4 uses.
+            return True
+        return param_name.endswith(self._QUANT_COMPANION_SUFFIXES)
 
     def _needs_quantization(self, param_name):
         q = self.hf_quantizer
@@ -318,6 +363,22 @@ class AirLLMBaseModel:
             elif param_name not in names:
                 names.append(param_name)
         return names
+
+    def _load_resident_modules(self):
+        """Load modules that sit outside the streamed embed -> layers -> norm -> lm_head sequence.
+
+        Multimodal checkpoints carry a vision tower and projector, and some architectures add
+        extra top-level norms. They never get a streaming hook, so without this they would stay on
+        the meta device and fail the moment they run. They are small (well under a GB), so we load
+        them once and leave them resident.
+        """
+        for name in self.layer_names_dict.get('resident', []):
+            try:
+                state_dict = self.load_layer_to_cpu(name)
+            except FileNotFoundError:
+                # Not every checkpoint of a given architecture ships every optional module.
+                continue
+            self.move_layer_to_device(state_dict)
 
     def _install_streaming_hooks(self):
         # Modules execute in this order during a forward: embed -> layers -> norm -> lm_head.
