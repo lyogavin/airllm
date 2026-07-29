@@ -15,11 +15,12 @@ for _readme in (os.path.join(here, "README.md"), os.path.join(here, os.pardir, "
 
 setuptools.setup(
     name="airllm",
-    version="3.0.1",
+    version="3.1.0",
     author="Gavin Li",
     author_email="gavinli@animaai.cloud",
     description="AirLLM runs 70B large language models on a single 4GB GPU without quantization, "
-                "distillation or pruning. 405B Llama 3.1 on 8GB, DeepSeek-V3 671B on ~12GB.",
+                "distillation or pruning. 405B Llama 3.1 on 8GB, DeepSeek-V3 671B on ~12GB, "
+                "Kimi K3 2.8T on under 4GB.",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/lyogavin/airllm",
@@ -36,6 +37,8 @@ setuptools.setup(
         'scipy',
         'sentencepiece',
         # 'bitsandbytes' is optional (used only for --compression); we fall back gracefully when absent.
+        # 'compressed-tensors' is optional too: only checkpoints stored in that format (Kimi K3's
+        # MXFP4 weights) need it, and transformers raises a clear error naming it when it is missing.
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
