@@ -20,6 +20,7 @@ if platform == "darwin":
 
 import torch
 import torch.nn as nn
+from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
 from .persist import ModelPersister
@@ -112,6 +113,25 @@ def uncompress_layer_state_dict(layer_state_dict):
 
     return layer_state_dict if uncompressed_layer_state_dict is None else uncompressed_layer_state_dict
 
+def layer_tensor_names(local_path, layer_name):
+    """List the tensors in a layer shard without reading any tensor data."""
+    with safe_open(str(Path(local_path) / (layer_name + ".safetensors")), framework="pt") as f:
+        return list(f.keys())
+
+
+def load_layer_subset(local_path, layer_name, keys):
+    """Read only `keys` from a layer shard.
+
+    safetensors can seek to individual tensors, so a single MoE expert costs its own few MB rather
+    than the whole ~16GB layer file. That is what makes per-expert streaming worthwhile.
+    """
+    out = {}
+    with safe_open(str(Path(local_path) / (layer_name + ".safetensors")), framework="pt") as f:
+        for k in keys:
+            out[k] = f.get_tensor(k)
+    return out
+
+
 def load_layer(local_path, layer_name, profiling=False):
     #layer_state_dict = load_file(Path(local_path) / (layer_name + ".safetensors"), device="cpu")
     layer_state_dict = ModelPersister.get_model_persister().load_model(layer_name, local_path)
@@ -185,6 +205,33 @@ def remove_real_and_linked_file(to_delete):
 
 
 
+def link_or_copy_file(src, dst):
+    """Point dst at src's data without duplicating it, falling back to a real copy.
+
+    A hard link is preferred over a symlink because it keeps the data alive even if the original
+    checkpoint file is later deleted (``delete_original``), and because it costs no extra disk.
+    Hard links need both paths on one filesystem, so we degrade to a symlink and finally to a copy.
+    Hugging Face caches store files as symlinks into a blob dir, so we always link the real file.
+    """
+    src = Path(os.path.realpath(str(src)))
+    dst = Path(dst)
+    if dst.exists() or dst.is_symlink():
+        dst.unlink()
+
+    try:
+        os.link(src, dst)
+        return 'hardlink'
+    except OSError:
+        pass
+    try:
+        os.symlink(src, dst)
+        return 'symlink'
+    except OSError:
+        pass
+    shutil.copyfile(src, dst)
+    return 'copy'
+
+
 def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitted_model_dir_name='splitted_model',
                           compression=None, layer_names=None, delete_original=False, repo_id=None, hf_token=None):
     """
@@ -243,12 +290,28 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
         if 'rotary_pos_emb' in layer_names:
             layers = [layer_names['rotary_pos_emb']] + layers
+        # Modules that are not part of the streamed sequence but still need their weights on disk,
+        # e.g. a multimodal model's vision tower / projector, or extra top-level norms. They get
+        # their own shard and are loaded once and kept resident.
+        layers = layers + list(layer_names.get('resident', []))
         layers = [l + "." for l in layers]
 
     # Drop layers that have no weights in the checkpoint. This happens for tied embeddings,
     # where lm_head shares storage with embed_tokens and has no entry of its own. Without this we
     # would try to save an empty shard (which fails) and never detect the split as complete.
     layers = [l for l in layers if any(k.startswith(l) for k in index.keys())]
+
+    # Split in ascending shard order. The loop below only ever walks the shard counter forward, so
+    # a module whose weights sit in an earlier shard than its predecessor's would silently be saved
+    # incomplete. That ordering isn't guaranteed once non-sequential modules (a vision tower, extra
+    # norms) are in the list, so sort by the last shard each module touches. This is a stable sort,
+    # so plain embed -> layers -> norm -> lm_head checkpoints keep their existing order.
+    def _last_shard_of(layer):
+        nums = [int(v.split('-')[1]) for k, v in index.items()
+                if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
+        return max(nums) if nums else -1
+
+    layers.sort(key=_last_shard_of)
 
 
     # check if splitting exists and all files are there
@@ -269,7 +332,36 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         else:
             print(f"some layer splits found, some are not, re-save all layers in case there's some corruptions.")
 
-    if not delete_original:
+    # Some checkpoints are already sharded exactly one module per file (Kimi K3, for instance, ships
+    # one ~17GB shard per decoder layer). Re-writing those into per-layer files would duplicate the
+    # entire checkpoint on disk -- 1.5TB+ for a 2.8T-parameter model -- and take hours, to produce
+    # byte-identical content. When a shard holds nothing but one module's tensors we link to it
+    # instead of copying.
+    passthrough = {}
+    # Linking only produces a file the loader can read when shards are stored in the same format
+    # the persister writes; the MLX persister, for instance, writes .mlx.npz.
+    persister_is_safetensors = type(ModelPersister.get_model_persister()).__name__ == 'SafetensorModelPersister'
+    if compression is None and safetensors_format and persister_is_safetensors:
+        shard_contents = defaultdict(list)
+        for k, v in index.items():
+            shard_contents[v].append(k)
+        for layer in layers:
+            files = {v for k, v in index.items() if k.startswith(layer)}
+            if len(files) != 1:
+                continue
+            only_file = next(iter(files))
+            if all(k.startswith(layer) for k in shard_contents[only_file]):
+                passthrough[layer] = only_file
+
+    if passthrough:
+        print(f"{len(passthrough)}/{len(layers)} modules are already one-per-shard; "
+              f"linking to the original files instead of copying them.")
+
+    # Must exist before check_space, which stats the filesystem it lives on.
+    saving_path.mkdir(parents=True, exist_ok=True)
+
+    # A copy is only made for the layers we cannot link, so only those need free space.
+    if not delete_original and len(passthrough) < len(layers):
         check_space(checkpoint_path, layer_shards_saving_path, compression, splitted_model_dir_name=splitted_model_dir_name)
 
 
@@ -289,13 +381,28 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
             except ValueError:
                 pass
 
-    if not os.path.exists(saving_path):
-        #os.makedirs(saving_path)
-        saving_path.mkdir(parents=True, exist_ok=True)
-
     single_modelfile = None
 
     for layer in tqdm(layers):
+
+        if layer in passthrough:
+            src = checkpoint_path / passthrough[layer]
+            if not os.path.exists(src):
+                assert repo_id is not None
+                huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(src),
+                                                  token=hf_token)
+            if not ModelPersister.get_model_persister().model_persist_exist(layer, saving_path):
+                link_or_copy_file(src, saving_path / (layer + 'safetensors'))
+                (saving_path / (layer + 'safetensors.done')).touch()
+            # Keep the shard cursor in step with what we skipped, so a later layer that does need
+            # loading doesn't walk back through (and read) every shard we just linked past.
+            src_parts = passthrough[layer].split('-')
+            if len(src_parts) > 1:
+                try:
+                    shard = max(shard, int(src_parts[1]))
+                except ValueError:
+                    pass
+            continue
 
         # Optionnally load next shard
         # checking whether after spliting from '-', if second element exists. otherwise it throws errors for single 'model.safetensor' files
@@ -395,9 +502,13 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
 
     # try local model path, if the model exist split and save there
     if os.path.exists(model_local_path_or_repo_id):
-        if os.path.exists(Path(model_local_path_or_repo_id) / 'pytorch_model.bin.index.json') or \
-           os.path.exists(Path(model_local_path_or_repo_id) / 'model.safetensors.index.json'):
-            print(f"found index file...")
+        # Accept single-file checkpoints too, not just sharded ones with an index: the splitter
+        # handles both, so requiring an index needlessly sent local single-file models down the
+        # "treat it as a repo id" path, where they fail as an invalid repo name.
+        local_weight_files = ('pytorch_model.bin.index.json', 'model.safetensors.index.json',
+                              'model.safetensors', 'pytorch_model.bin')
+        if any(os.path.exists(Path(model_local_path_or_repo_id) / f) for f in local_weight_files):
+            print(f"found local checkpoint...")
             return Path(model_local_path_or_repo_id), split_and_save_layers(model_local_path_or_repo_id, layer_shards_saving_path,
                                                                             compression=compression, layer_names=layer_names, delete_original=delete_original)
         else:
