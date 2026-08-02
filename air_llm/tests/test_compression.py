@@ -2,13 +2,14 @@ import sys
 import unittest
 
 import torch
+import pytest
+
 sys.path.insert(0, '../airllm')
 
-from airllm import compress_layer_state_dict, uncompress_layer_state_dict
+from airllm.utils import compress_layer_state_dict, uncompress_layer_state_dict
 
 
-
-
+@pytest.mark.gpu
 class TestCompression(unittest.TestCase):
     def setUp(self):
         pass
