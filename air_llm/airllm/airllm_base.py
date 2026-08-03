@@ -1,4 +1,5 @@
 
+import os
 from typing import List, Optional, Tuple, Union
 from tqdm import tqdm
 from pathlib import Path
@@ -192,7 +193,9 @@ class AirLLMBaseModel:
 
         self.set_layers_from_layer_names()
         self._load_resident_modules()
-        self._install_streaming_hooks()
+        self.full_load_mode = False
+        if not self._try_full_load():
+            self._install_streaming_hooks()
 
     # ---- customization hooks for subclasses -------------------------------------------------
 
@@ -717,6 +720,8 @@ class AirLLMBaseModel:
         return load_layer_subset(self.checkpoint_path, self.layer_names[idx], keys)
 
     def _pre_hook(self, module, args):
+        if self.full_load_mode:
+            return  # Weights already resident on GPU — nothing to load
         idx = module._airllm_idx
 
         if self.prefetching and self._prefetch_future is not None and self._prefetched_idx == idx:
@@ -734,6 +739,8 @@ class AirLLMBaseModel:
                 self._prefetched_idx = nxt
 
     def _post_hook(self, module, args, output):
+        if self.full_load_mode:
+            return output  # Weights stay on GPU — nothing to evict
         # module.to('meta') would also evict the experts, which manage their own lifetime, so with
         # expert streaming we only release exactly what this hook placed.
         if self.hf_quantizer is not None or getattr(self, '_expert_streaming', False):
@@ -743,6 +750,113 @@ class AirLLMBaseModel:
             module.to('meta')
         clean_memory()
         return output
+
+    # ---- full-load bypass -------------------------------------------------------------------
+    # When AIRLLM_FULL_LOAD=1 is set and the entire model fits in GPU VRAM, load all weights
+    # upfront and skip the per-layer streaming hooks. This eliminates disk I/O during inference
+    # and is especially beneficial for smaller models on cards with ample VRAM.
+
+    _FULL_LOAD_ENV_VAR = "AIRLLM_FULL_LOAD"
+    _FULL_LOAD_VRAM_HEADROOM = 0.85  # Use 85% of free VRAM as budget for weights
+
+    def _estimate_full_load_gpu_bytes(self):
+        """Estimate GPU memory needed for all model weights from safetensors file sizes.
+
+        Walks ``*.safetensors`` files under ``self.checkpoint_path``.  For uncompressed
+        models (bf16/fp16) disk bytes ≈ GPU bytes.  For AirLLM's own compression,
+        the shards store the compressed payload and GPU holds the decompressed version.
+        """
+        checkpoint = Path(self.checkpoint_path)
+        total = 0
+        for sf in checkpoint.glob('*.safetensors'):
+            total += sf.stat().st_size
+
+        if self.compression == '4bit':
+            # 4-bit packed on disk → fp16/bf16 on GPU (~4× expansion)
+            total = int(total * 4)
+        elif self.compression == '8bit':
+            # 8-bit packed on disk → fp16/bf16 on GPU (~2× expansion)
+            total = int(total * 2)
+        # else: uncompressed — disk bytes ≈ GPU bytes (within a few %)
+        return total
+
+    def _try_full_load(self):
+        """Attempt to load the full model to GPU, bypassing layer streaming.
+
+        Returns True if full-load succeeded, False if we should fall back to streaming.
+        """
+        env_val = os.environ.get(self._FULL_LOAD_ENV_VAR, '').strip().lower()
+        if env_val not in ('1', 'true', 'yes', 'on'):
+            return False
+
+        # MoE deferral: per-expert streaming loads only the experts a token routes to.
+        # Materialising every expert for a model like Kimi K3 (~55GB/layer × 94 layers)
+        # is infeasible, so full-load is unsupported for MoE architectures for now.
+        if self.layer_names_dict.get('expert_prefix'):
+            print("AIRLLM_FULL_LOAD: MoE architecture detected "
+                  "(layer_names_dict has 'expert_prefix'). "
+                  "Full-load bypass is not yet supported for MoE models. "
+                  "Falling back to layer streaming.")
+            return False
+
+        if not torch.cuda.is_available():
+            print("AIRLLM_FULL_LOAD: CUDA not available, falling back to layer streaming.")
+            return False
+
+        estimated_bytes = self._estimate_full_load_gpu_bytes()
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        budget_bytes = int(free_bytes * self._FULL_LOAD_VRAM_HEADROOM)
+
+        estimated_gb = estimated_bytes / (1024 ** 3)
+        budget_gb = budget_bytes / (1024 ** 3)
+        free_gb = free_bytes / (1024 ** 3)
+        total_gb = total_bytes / (1024 ** 3)
+
+        print(f"AIRLLM_FULL_LOAD: estimated model GPU footprint = {estimated_gb:.1f} GB, "
+              f"VRAM budget = {budget_gb:.1f} GB "
+              f"({self._FULL_LOAD_VRAM_HEADROOM*100:.0f}% of {free_gb:.1f} GB free "
+              f"/ {total_gb:.1f} GB total)")
+
+        if estimated_bytes <= budget_bytes:
+            print("AIRLLM_FULL_LOAD: model fits in VRAM budget — "
+                  "loading all layers to GPU (full-load mode).")
+            self._full_load_all_layers()
+            return True
+        else:
+            print(f"AIRLLM_FULL_LOAD: model does NOT fit "
+                  f"(need ~{estimated_gb:.1f} GB, budget {budget_gb:.1f} GB). "
+                  f"Falling back to layer streaming.")
+            return False
+
+    def _full_load_all_layers(self):
+        """Load every layer's weights to GPU and keep them resident.
+
+        No streaming hooks are installed — :meth:`generate` runs at native GPU speed.
+        """
+        self.full_load_mode = True
+
+        tie_embeddings = bool(getattr(self.config, "tie_word_embeddings", False))
+        lm_head_name = self.layer_names_dict.get('lm_head', 'lm_head')
+
+        for layer_name in tqdm(self.layer_names, desc="Loading all layers to GPU"):
+            # When embeddings are tied, lm_head reuses the embed_tokens weight
+            # and has no shard of its own on disk.
+            if tie_embeddings and layer_name == lm_head_name:
+                continue
+
+            shard = Path(self.checkpoint_path) / f"{layer_name}.safetensors"
+            if not shard.exists():
+                continue
+
+            state_dict = self.load_layer_to_cpu(layer_name)
+            self.move_layer_to_device(state_dict)
+            # No eviction — weights stay on GPU for the lifetime of the model
+
+        if tie_embeddings:
+            self.model.tie_weights()
+
+        print(f"AIRLLM_FULL_LOAD: all layers loaded to GPU "
+              f"(device: {self.running_device}, dtype: {self.running_dtype}).")
 
     # ---- delegation to the underlying transformers model ------------------------------------
 

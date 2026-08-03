@@ -37,6 +37,10 @@ def cap_vram(max_vram_gb):
 
 
 def run_airllm(args):
+    import os
+    if args.full_load:
+        os.environ['AIRLLM_FULL_LOAD'] = '1'
+
     from airllm import AutoModel
 
     model = AutoModel.from_pretrained(args.model, compression=args.compression,
@@ -84,6 +88,8 @@ def main():
     p.add_argument("--compression", default=None, choices=[None, "4bit", "8bit"])
     p.add_argument("--delete-original", action="store_true",
                    help="delete the original checkpoint shards while splitting (saves disk for big models)")
+    p.add_argument("--full-load", action="store_true",
+                   help="set AIRLLM_FULL_LOAD=1 to bypass layer streaming when model fits in VRAM")
     p.add_argument("--compare", action="store_true",
                    help="also run a full-load reference and assert outputs match")
     args = p.parse_args()
