@@ -6,12 +6,14 @@ name: Refresh Star History
 # star-history.com SVG API, which is rate-limited and returns an empty chart
 # for large repos. The README embeds the committed PNG, so it always renders.
 #
-# Since 2026-06-30 GitHub restricts GET /repos/{owner}/{repo}/stargazers to
-# admins/collaborators. The Actions GITHUB_TOKEN is an installation token and
-# gets 403, so this workflow needs a collaborator PAT in STAR_HISTORY_TOKEN:
-#   fine-grained: Metadata (read) on this repo, or
-#   classic: public_repo
-#   gh secret set STAR_HISTORY_TOKEN
+# The chart is built from GraphQL, not REST. GitHub restricted REST /stargazers to
+# admins/collaborators in 2026-06, and then refused fine-grained tokens on it outright
+# ("Resource not accessible by personal access token"), which broke this job twice on
+# token permissions alone. GraphQL returns the same public starredAt data without that
+# gate, so the default Actions GITHUB_TOKEN is enough and no PAT is required.
+#
+# The STAR_HISTORY_TOKEN secret this used to need is now unused and can be deleted; do
+# not add a PAT back if this fails, since a token was never the real fix.
 
 on:
   schedule:
@@ -35,15 +37,12 @@ jobs:
 
       - name: Generate star history charts (light + dark)
         env:
-          # Collaborator/admin PAT; Actions GITHUB_TOKEN cannot list stargazers.
-          GITHUB_TOKEN: ${{ secrets.STAR_HISTORY_TOKEN }}
+          # The built-in token is enough for GraphQL, so no secret is involved.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          if [ -z "$GITHUB_TOKEN" ]; then
-            echo "::error::Missing secret STAR_HISTORY_TOKEN. Create a collaborator PAT (fine-grained Metadata:read, or classic public_repo) and run: gh secret set STAR_HISTORY_TOKEN"
-            exit 1
-          fi
-          python scripts/gen_star_history.py "${{ github.repository }}" assets/star-history.png light
-          python scripts/gen_star_history.py "${{ github.repository }}" assets/star-history-dark.png dark
+          python scripts/gen_star_history.py "${{ github.repository }}" \
+            assets/star-history.png light \
+            assets/star-history-dark.png dark
 
       - name: Commit if changed
         uses: stefanzweifel/git-auto-commit-action@v5

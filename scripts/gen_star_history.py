@@ -7,21 +7,32 @@ so it works reliably for repos with tens of thousands of stars. Output is a PNG,
 always renders in GitHub markdown.
 
 Usage:
-    GITHUB_TOKEN=... python scripts/gen_star_history.py [owner/repo] [output.png] [theme]
+    GITHUB_TOKEN=... python scripts/gen_star_history.py [owner/repo] [output.png theme]...
 
-theme is "light" (default) or "dark".
+theme is "light" (default) or "dark". Pass several output/theme pairs to render them all
+from a single pass over the API.
 """
 import datetime
 import json
-import math
 import os
 import sys
 import urllib.error
 import urllib.request
 
+GRAPHQL_URL = "https://api.github.com/graphql"
+
 REPO = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("REPO", "lyogavin/airllm")
-OUT = sys.argv[2] if len(sys.argv) > 2 else "assets/star-history.png"
-THEME = (sys.argv[3] if len(sys.argv) > 3 else os.environ.get("THEME", "light")).lower()
+
+# Remaining args are output/theme pairs. Walking the stargazer connection is by far the
+# slowest part of this script, so rendering every theme from one walk beats invoking the
+# script once per theme.
+_rest = sys.argv[2:]
+if _rest:
+    TARGETS = [(_rest[i], _rest[i + 1].lower() if i + 1 < len(_rest) else "light")
+               for i in range(0, len(_rest), 2)]
+else:
+    TARGETS = [("assets/star-history.png", os.environ.get("THEME", "light").lower())]
+
 TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
 PER_PAGE = 100
 MAX_SAMPLES = 30
@@ -47,48 +58,115 @@ def gh(url, accept="application/vnd.github+json"):
         except json.JSONDecodeError:
             msg = body
         hint = ""
-        if e.code == 403 and "stargazers" in url:
+        if e.code == 401:
             hint = (
-                "\nGitHub restricts /stargazers to admins/collaborators; the "
-                "Actions GITHUB_TOKEN cannot access it. Use a collaborator PAT "
-                "via the STAR_HISTORY_TOKEN secret."
+                "\nThe token was rejected outright, which means it is expired or malformed "
+                "rather than under-permissioned. Issue a new one and re-run: "
+                "gh secret set STAR_HISTORY_TOKEN"
+            )
+        elif e.code == 403 and "personal access token" in msg.lower():
+            # A fine-grained PAT reaching an endpoint its permissions do not cover. This is
+            # distinct from a missing token, and reads identically in logs unless called out:
+            # fine-grained grants have never been enough for /stargazers.
+            hint = (
+                "\nA fine-grained PAT cannot read /stargazers. Use a *classic* token with the "
+                "public_repo scope (https://github.com/settings/tokens) and re-run: "
+                "gh secret set STAR_HISTORY_TOKEN"
+            )
+        elif e.code == 403 and "stargazers" in url:
+            hint = (
+                "\nGitHub restricts /stargazers to admins/collaborators. The token in "
+                "STAR_HISTORY_TOKEN must belong to one, and must be a classic token with "
+                "the public_repo scope."
             )
         raise SystemExit(f"GitHub API {e.code} for {url}: {msg}{hint}") from e
 
 
+def gql(query, variables):
+    payload = json.dumps({"query": query, "variables": variables}).encode()
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "User-Agent": "airllm-star-history",
+    }
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
+    req = urllib.request.Request(GRAPHQL_URL, data=payload, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            body = json.load(r)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")
+        extra = "" if TOKEN else "\nNo token found in GITHUB_TOKEN or GH_TOKEN."
+        raise SystemExit(f"GitHub GraphQL {e.code}: {detail}{extra}") from e
+    if body.get("errors"):
+        raise SystemExit(f"GitHub GraphQL error: {json.dumps(body['errors'])}")
+    return body["data"]
+
+
+STARGAZER_QUERY = """
+query($owner:String!, $name:String!, $after:String) {
+  repository(owner:$owner, name:$name) {
+    stargazerCount
+    stargazers(first:%d, after:$after, orderBy:{field:STARRED_AT, direction:ASC}) {
+      pageInfo { hasNextPage endCursor }
+      edges { starredAt }
+    }
+  }
+}
+""" % PER_PAGE
+
+
+def fetch_starred_at():
+    """Every stargazer timestamp, oldest first, plus the repo's current star count.
+
+    Uses GraphQL rather than REST. GitHub restricted REST /stargazers to admins and
+    collaborators in 2026, and then tightened it again so that fine-grained tokens are
+    refused outright -- the same chart broke twice on token permissions. GraphQL serves
+    the identical public data without that gate.
+
+    Its cursors encode a timestamp and user id rather than an offset, so unlike REST we
+    cannot jump to sampled pages and have to walk the whole connection. That is a few
+    hundred requests for a repo this size, which is fine for a once-a-day job.
+    """
+    owner, _, name = REPO.partition("/")
+    stamps, cursor, total = [], None, 0
+    while True:
+        data = gql(STARGAZER_QUERY, {"owner": owner, "name": name, "after": cursor})
+        repo = data.get("repository")
+        if repo is None:
+            raise SystemExit(f"repo {REPO} not found, or the token cannot see it")
+        total = int(repo["stargazerCount"])
+        conn = repo["stargazers"]
+        stamps.extend(e["starredAt"] for e in conn["edges"])
+        if not conn["pageInfo"]["hasNextPage"]:
+            return stamps, total
+        cursor = conn["pageInfo"]["endCursor"]
+
+
 def main():
-    info = gh(f"https://api.github.com/repos/{REPO}")
-    total = int(info["stargazers_count"])
-    if total <= 0:
+    stamps, total = fetch_starred_at()
+    if total <= 0 or not stamps:
         raise SystemExit("repo has no stars")
 
-    max_page = max(1, math.ceil(total / PER_PAGE))
-    if max_page == 1:
-        pages = [1]
-    else:
-        n = min(MAX_SAMPLES, max_page)
-        pages = sorted({1, max_page} | {
-            round(1 + i * (max_page - 1) / (n - 1)) for i in range(n)
-        })
-
+    # Thin the full history down to a readable number of vertices. Walking every
+    # stargazer would plot tens of thousands of points on top of each other.
+    step = max(1, len(stamps) // MAX_SAMPLES)
     points = []
-    for p in pages:
-        data = gh(
-            f"https://api.github.com/repos/{REPO}/stargazers?per_page={PER_PAGE}&page={p}",
-            accept="application/vnd.github.star+json",
-        )
-        if not data:
-            continue
-        starred_at = data[0]["starred_at"]
-        cumulative = (p - 1) * PER_PAGE + 1
-        dt = datetime.datetime.fromisoformat(starred_at.replace("Z", "+00:00"))
-        points.append((dt, cumulative))
+    for i in range(0, len(stamps), step):
+        dt = datetime.datetime.fromisoformat(stamps[i].replace("Z", "+00:00"))
+        points.append((dt, i + 1))
 
     points.append((datetime.datetime.now(datetime.timezone.utc), total))
     points = sorted(set(points))
     if len(points) < 2:
         raise SystemExit("not enough data points to plot")
 
+    for out, theme in TARGETS:
+        render(points, total, out, theme)
+
+
+def render(points, total, out, theme):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.dates as mdates
@@ -97,7 +175,7 @@ def main():
     xs = [d for d, _ in points]
     ys = [c for _, c in points]
 
-    c = THEMES.get(THEME, THEMES["light"])
+    c = THEMES.get(theme, THEMES["light"])
     fig, ax = plt.subplots(figsize=(10, 6))
     fig.patch.set_facecolor(c["bg"])
     ax.set_facecolor(c["bg"])
@@ -115,9 +193,10 @@ def main():
     fig.autofmt_xdate()
     fig.tight_layout()
 
-    os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
-    fig.savefig(OUT, dpi=130, facecolor=c["bg"])
-    print(f"wrote {OUT} ({THEME}): {len(points)} points, {total} stars")
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    fig.savefig(out, dpi=130, facecolor=c["bg"])
+    plt.close(fig)
+    print(f"wrote {out} ({theme}): {len(points)} points, {total} stars")
 
 
 if __name__ == "__main__":
