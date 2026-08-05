@@ -80,7 +80,8 @@ def clean_memory():
     except Exception as ex:
         # maybe platform
         pass
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def uncompress_layer_state_dict(layer_state_dict):
@@ -196,12 +197,13 @@ def compress_layer_state_dict(layer_state_dict, compression=None):
     return compressed_layer_state_dict if compressed_layer_state_dict is not None else layer_state_dict
 
 def remove_real_and_linked_file(to_delete):
-    if (os.path.realpath(to_delete) != to_delete):
+    targetpath = None
+    if os.path.realpath(to_delete) != to_delete:
         targetpath = os.path.realpath(to_delete)
 
     os.remove(to_delete)
-    if (targetpath):
-         os.remove(targetpath)
+    if targetpath:
+        os.remove(targetpath)
 
 
 
@@ -270,7 +272,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     elif os.path.exists(checkpoint_path / 'pytorch_model.bin'):
         # single-file torch checkpoint: map every tensor to that one file
         safetensors_format = False
-        single_sd = torch.load(checkpoint_path / 'pytorch_model.bin', map_location='cpu')
+        single_sd = torch.load(checkpoint_path / 'pytorch_model.bin', map_location='cpu', weights_only=True)
         index = {k: 'pytorch_model.bin' for k in single_sd.keys()}
         del single_sd
     else:
@@ -431,7 +433,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                                                     token=hf_token)
 
                 if not safetensors_format:
-                    state_dict.update(torch.load(to_load, map_location='cpu'))
+                    state_dict.update(torch.load(to_load, map_location='cpu', weights_only=True))
                 else:
                     state_dict.update(load_file(to_load, device='cpu'))
 
@@ -445,7 +447,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                 huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
                                                 token=hf_token)
             if not safetensors_format:
-                state_dict.update(torch.load(to_load, map_location='cpu'))
+                state_dict.update(torch.load(to_load, map_location='cpu', weights_only=True))
             else:
                 state_dict.update(load_file(to_load, device='cpu'))
 
