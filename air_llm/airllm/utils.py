@@ -209,9 +209,10 @@ def remove_real_and_linked_file(to_delete):
     to_delete = os.fspath(to_delete)
     targetpath = None
 
-    realpath = os.path.realpath(to_delete)
-    if realpath != to_delete:
-        targetpath = realpath
+    # Only treat the path as "linked" when it's actually a symlink; realpath()
+    # can also differ for non-symlink paths (e.g., ".." components).
+    if os.path.islink(to_delete):
+        targetpath = os.path.realpath(to_delete)
 
     # Remove the primary path (symlink or regular file).
     try:
@@ -219,10 +220,12 @@ def remove_real_and_linked_file(to_delete):
     except FileNotFoundError:
         return
 
-    # If it was a symlink, also remove the resolved target so we don't leave
-    # orphaned blobs on disk.
+    # If it was a symlink, also remove the resolved target (best-effort).
     if targetpath is not None and os.path.exists(targetpath):
-        os.remove(targetpath)
+        try:
+            os.remove(targetpath)
+        except FileNotFoundError:
+            pass
 
 
 
