@@ -196,12 +196,33 @@ def compress_layer_state_dict(layer_state_dict, compression=None):
     return compressed_layer_state_dict if compressed_layer_state_dict is not None else layer_state_dict
 
 def remove_real_and_linked_file(to_delete):
-    if (os.path.realpath(to_delete) != to_delete):
-        targetpath = os.path.realpath(to_delete)
+    """Remove a file, following symlinks to also remove the target if present.
 
-    os.remove(to_delete)
-    if (targetpath):
-         os.remove(targetpath)
+    If *to_delete* is a symlink the resolved target is removed after the link
+    itself.  For regular files the function simply deletes the file.
+
+    Parameters
+    ----------
+    to_delete : str | Path
+        Path to the file (or symlink) to remove.
+    """
+    to_delete = os.fspath(to_delete)
+    targetpath = None
+
+    realpath = os.path.realpath(to_delete)
+    if realpath != to_delete:
+        targetpath = realpath
+
+    # Remove the primary path (symlink or regular file).
+    try:
+        os.remove(to_delete)
+    except FileNotFoundError:
+        return
+
+    # If it was a symlink, also remove the resolved target so we don't leave
+    # orphaned blobs on disk.
+    if targetpath is not None and os.path.exists(targetpath):
+        os.remove(targetpath)
 
 
 
