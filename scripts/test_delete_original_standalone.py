@@ -1,8 +1,10 @@
 """Standalone test for remove_real_and_linked_file (issue #297).
 
 This script tests the function in isolation, avoiding the torch/safetensors
-import chain. Symlink tests are skipped on Windows (requires admin or
-developer mode).
+import chain.  It lives in scripts/ rather than tests/ so unittest discovery
+does not pick it up (it contains a copied function, not a production import).
+
+Symlink tests are skipped on Windows (requires admin or developer mode).
 """
 
 import os
@@ -15,23 +17,27 @@ from pathlib import Path
 
 
 # ── Copy of the fixed function (from airllm/utils.py) ──────────────────
+# NOTE: This is intentionally duplicated for portability.  Keep in sync
+# with the real implementation in air_llm/airllm/utils.py.
 
 def remove_real_and_linked_file(to_delete):
     """Remove a file, following symlinks to also remove the target if present."""
     to_delete = os.fspath(to_delete)
     targetpath = None
 
-    realpath = os.path.realpath(to_delete)
-    if realpath != to_delete:
-        targetpath = realpath
+    if os.path.islink(to_delete):
+        targetpath = os.path.realpath(to_delete)
 
     try:
         os.remove(to_delete)
     except FileNotFoundError:
         return
 
-    if targetpath is not None and os.path.exists(targetpath):
-        os.remove(targetpath)
+    if targetpath is not None:
+        try:
+            os.remove(targetpath)
+        except FileNotFoundError:
+            pass
 
 
 # ── Tests ──────────────────────────────────────────────────────────────
@@ -92,7 +98,7 @@ class TestRemoveRealAndLinkedFile(unittest.TestCase):
             remove_real_and_linked_file(os.path.join(self.tmpdir, name))
         self.assertEqual(os.listdir(self.tmpdir), [])
 
-    @unittest.skipUnless(platform.system() == "Linux", "symlink test requires Linux/macOS")
+    @unittest.skipUnless(platform.system() != "Windows", "symlink tests require admin on Windows")
     def test_symlink_removes_link_and_target(self):
         """When to_delete is a symlink, both link and target are removed."""
         target = os.path.join(self.tmpdir, "blobs", "abc123")
@@ -108,7 +114,7 @@ class TestRemoveRealAndLinkedFile(unittest.TestCase):
         self.assertFalse(os.path.exists(link))
         self.assertFalse(os.path.exists(target))
 
-    @unittest.skipUnless(platform.system() == "Linux", "symlink test requires Linux/macOS")
+    @unittest.skipUnless(platform.system() != "Windows", "symlink tests require admin on Windows")
     def test_symlink_with_path_object(self):
         """Symlink removal works with Path input too."""
         target = Path(self.tmpdir) / "blob.bin"
@@ -119,7 +125,7 @@ class TestRemoveRealAndLinkedFile(unittest.TestCase):
         self.assertFalse(link.exists())
         self.assertFalse(target.exists())
 
-    @unittest.skipUnless(platform.system() == "Linux", "symlink test requires Linux/macOS")
+    @unittest.skipUnless(platform.system() != "Windows", "symlink tests require admin on Windows")
     def test_broken_symlink_does_not_crash(self):
         """Deleting a symlink whose target is already gone should not raise."""
         link = os.path.join(self.tmpdir, "broken-link.bin")

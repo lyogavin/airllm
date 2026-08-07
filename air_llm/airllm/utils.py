@@ -201,6 +201,11 @@ def remove_real_and_linked_file(to_delete):
     If *to_delete* is a symlink the resolved target is removed after the link
     itself.  For regular files the function simply deletes the file.
 
+    .. warning::
+       When removing symlinks in Hugging Face cache directories, the resolved
+       target may be shared across snapshots or revisions.  Deleting it will
+       break other snapshots that still reference the same blob.
+
     Parameters
     ----------
     to_delete : str | Path
@@ -220,8 +225,10 @@ def remove_real_and_linked_file(to_delete):
     except FileNotFoundError:
         return
 
-    # If it was a symlink, also remove the resolved target (best-effort).
-    if targetpath is not None and os.path.exists(targetpath):
+    # If it was a symlink, also remove the resolved target so we don't leave
+    # orphaned blobs on disk.  Wrap in try/except for TOCTOU safety — another
+    # process may have already removed the target.
+    if targetpath is not None:
         try:
             os.remove(targetpath)
         except FileNotFoundError:

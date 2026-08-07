@@ -9,6 +9,7 @@ Covers:
 
 import importlib.util
 import os
+import platform
 import sys
 import tempfile
 import unittest
@@ -61,6 +62,7 @@ class TestRemoveRealAndLinkedFile(unittest.TestCase):
 
     # --- symlinks --------------------------------------------------------
 
+    @unittest.skipUnless(platform.system() != "Windows", "symlink tests require admin on Windows")
     def test_symlink_removes_link_and_target(self):
         """When to_delete is a symlink, both link and target are removed."""
         target = os.path.join(self.tmpdir, "blobs", "abc123")
@@ -77,6 +79,7 @@ class TestRemoveRealAndLinkedFile(unittest.TestCase):
         self.assertFalse(os.path.exists(link))
         self.assertFalse(os.path.exists(target))
 
+    @unittest.skipUnless(platform.system() != "Windows", "symlink tests require admin on Windows")
     def test_symlink_with_path_object(self):
         """Symlink removal works with Path input too."""
         target = Path(self.tmpdir) / "blob.bin"
@@ -98,6 +101,7 @@ class TestRemoveRealAndLinkedFile(unittest.TestCase):
         # Should not raise
         remove_real_and_linked_file(nonexistent)
 
+    @unittest.skipUnless(platform.system() != "Windows", "symlink tests require admin on Windows")
     def test_broken_symlink_does_not_crash(self):
         """Deleting a symlink whose target is already gone should not raise."""
         link = os.path.join(self.tmpdir, "broken-link.bin")
