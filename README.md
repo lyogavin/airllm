@@ -139,7 +139,7 @@ Note: During inference, the original model will first be decomposed and saved la
 
 ## Model Compression
 
-Model compression uses block-wise quantization to reduce the size of the layer shards written to disk. It can make a model easier to store and move, but it does **not** guarantee faster inference: each layer is dequantized as it is loaded, and the result depends on the storage device, accelerator, model, and workload. Benchmark both modes on your target hardware before enabling compression for performance reasons. For background on the quantization method, see [this paper](https://arxiv.org/abs/2212.09720).
+Model compression uses block-wise quantization to reduce the size of the layer shards written to disk. It can make a model easier to store and move, but it does **not** guarantee faster inference: compression currently disables prefetching and adds GPU dequantization work for each layer, so it tends to help when disk I/O is the bottleneck and can hurt when it is not. The result also depends on the storage device, accelerator, model, and workload. Benchmark both modes on your target hardware before enabling compression for performance reasons. For background on the quantization method, see [this paper](https://arxiv.org/abs/2212.09720).
 
 #### How to enable model compression:
 
