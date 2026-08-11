@@ -232,6 +232,26 @@ def link_or_copy_file(src, dst):
     return 'copy'
 
 
+def _count_layers(index_keys, marker):
+    # Extract the layer index that immediately follows `marker` in each key. Using
+    # .find() (rather than assuming the key starts with `marker`) and guarding with
+    # .isdigit() keeps this correct for checkpoints where the LM is nested under a
+    # wrapper module, e.g. VLM checkpoints shaped like
+    # "language_model.model.layers.0.self_attn.q_proj.weight" -- `marker` is still
+    # found inside the key, but the segment right after it is the layer index, not
+    # some fixed split position. Without the isdigit guard this raises
+    # "ValueError: invalid literal for int() with base 10: 'layers'" on such models.
+    nums = set()
+    for k in index_keys:
+        pos = k.find(marker)
+        if pos == -1:
+            continue
+        head = k[pos + len(marker):].split('.', 1)[0]
+        if head.isdigit():
+            nums.add(int(head))
+    return len(nums)
+
+
 def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitted_model_dir_name='splitted_model',
                           compression=None, layer_names=None, delete_original=False, repo_id=None, hf_token=None):
     """
@@ -277,25 +297,6 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         raise FileNotFoundError(
             f"No model weights found under {checkpoint_path}. Expected one of: "
             f"model.safetensors(.index.json) or pytorch_model.bin(.index.json).")
-
-    def _count_layers(index_keys, marker):
-        # Extract the layer index that immediately follows `marker` in each key. Using
-        # .find() (rather than assuming the key starts with `marker`) and guarding with
-        # .isdigit() keeps this correct for checkpoints where the LM is nested under a
-        # wrapper module, e.g. VLM checkpoints shaped like
-        # "language_model.model.layers.0.self_attn.q_proj.weight" -- `marker` is still
-        # found inside the key, but the segment right after it is the layer index, not
-        # some fixed split position. Without the isdigit guard this raises
-        # "ValueError: invalid literal for int() with base 10: 'layers'" on such models.
-        nums = set()
-        for k in index_keys:
-            pos = k.find(marker)
-            if pos == -1:
-                continue
-            head = k[pos + len(marker):].split('.', 1)[0]
-            if head.isdigit():
-                nums.add(int(head))
-        return len(nums)
 
     if layer_names is None:
         n_layers = _count_layers(index.keys(), 'model.layers.')
