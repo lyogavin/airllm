@@ -233,21 +233,15 @@ def link_or_copy_file(src, dst):
 
 
 def _count_layers(index_keys, marker):
-    # Extract the layer index that immediately follows `marker` in each key. Using
-    # .find() (rather than assuming the key starts with `marker`) and guarding with
-    # .isdigit() keeps this correct for checkpoints where the LM is nested under a
-    # wrapper module, e.g. VLM checkpoints shaped like
-    # "language_model.model.layers.0.self_attn.q_proj.weight" -- `marker` is still
-    # found inside the key, but the segment right after it is the layer index, not
-    # some fixed split position. Without the isdigit guard this raises
-    # "ValueError: invalid literal for int() with base 10: 'layers'" on such models.
+    # Layer index = the digit segment right after `marker` in each key. .find() + .isdigit()
+    # (mirroring the MoE expert parser in airllm_base.py) makes this correct for VLM-style
+    # keys like "language_model.model.layers.0.self_attn.q_proj.weight", where the index is
+    # not at a fixed split position -- the previous code crashed with
+    # "ValueError: invalid literal for int() with base 10: 'layers'".
     nums = set()
     for k in index_keys:
         pos = k.find(marker)
-        if pos == -1:
-            continue
-        head = k[pos + len(marker):].split('.', 1)[0]
-        if head.isdigit():
+        if pos != -1 and (head := k[pos + len(marker):].split('.', 1)[0]).isdigit():
             nums.add(int(head))
     return len(nums)
 
