@@ -57,7 +57,7 @@ class TestLayerCountParsing(unittest.TestCase):
     def test_kimi_k3_language_model_prefix(self):
         # Kimi K3 nests the decoder under language_model (airllm_kimi_k3.py)
         prefix = 'language_model.model.layers'
-        keys = [f'{prefix}.{i}.block_sparse_moe.experts.0.w1.weight' for i in range(3)]
+        keys = layer_keys(prefix, 3, 'block_sparse_moe.experts.0.w1.weight')
         self.assertEqual(_count_layers(keys, prefix + '.'), 3)
 
     def test_nested_vlm_default_layout(self):
