@@ -272,11 +272,11 @@ model.tokenizer.decode(generation_output.sequences[0])
 
 AirLLM works out of the box with **virtually every popular open LLM** — just pass its Hugging Face ID to `AutoModel.from_pretrained(...)`. That covers all the major families:
 
-**Llama** (2 / 3 / 3.1 / 3.3 / 4) · **Qwen** (1 / 2 / 2.5 / 3, including MoE and FP8) · **DeepSeek** (V2 / V3 / R1) · **Mistral & Mixtral** · **Phi** · **Gemma** · **ChatGLM** · **Baichuan** · **InternLM** · **Yi** — and most new models the day they're released.
+**Llama** (2 / 3 / 3.1 / 3.3 / 4) · **Qwen** (1 / 2 / 2.5 / 3, including MoE and FP8) · **DeepSeek** (V2 / V3 / R1) · **Kimi** (K3) · **Mistral & Mixtral** · **Phi** · **Gemma** · **ChatGLM** · **Baichuan** · **InternLM** · **Yi** — and most new models the day they're released.
 
 ### Tiny GPU, huge models
 
-The trick: AirLLM only ever keeps **one layer on the GPU at a time**, so the VRAM you need depends on the model's layer size — not its total size. That's how a 671B model fits on a hobbyist card:
+The trick: AirLLM only ever keeps **one layer on the GPU at a time**, so the VRAM you need depends on the model's layer size — not its total size. For sparse MoE checkpoints whose layers are too large to hold even one at a time, it goes a step finer and streams **one expert at a time**, so what has to fit is the handful of experts a token actually routes to. That's how a 671B model — or a 2.8T one — fits on a hobbyist card:
 
 | Model | Size | GPU VRAM |
 |---|---|---|
@@ -286,8 +286,9 @@ The trick: AirLLM only ever keeps **one layer on the GPU at a time**, so the VRA
 | Llama 3.x 70B (full precision) | 70B | **~4 GB** |
 | Llama 3.1 405B | 405B | **~8 GB** |
 | DeepSeek-V3 | **671B** | **~12 GB** |
+| Kimi K3 (MoE, per-expert streaming) | **2.8T** | **~3.7 GB** |
 
-Same one line of code for all of them — no special setup.
+Same one line of code for all of them. The only one that needs anything extra is Kimi K3: `pip install compressed-tensors flash-attn`, on a CUDA 12 build of torch — see the [2026/07 update](#updates) for why.
 
 ## Acknowledgement
 
