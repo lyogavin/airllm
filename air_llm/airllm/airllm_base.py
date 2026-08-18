@@ -6,7 +6,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, GenerationConfig
+import transformers
+from transformers import AutoConfig, AutoTokenizer, GenerationConfig
 from transformers.generation import GenerationMixin
 from accelerate import init_empty_weights
 from accelerate.utils.modeling import set_module_tensor_to_device
@@ -158,6 +159,11 @@ class AirLLMBaseModel:
         # avoids it. Users can still override via dtype=.
         if dtype is None:
             cfg_dtype = getattr(self.config, "torch_dtype", None)
+            if cfg_dtype is None:
+                cfg_dtype = getattr(self.config, "dtype", None)
+            if cfg_dtype is None:
+                text_cfg = getattr(self.config, "text_config", None)
+                cfg_dtype = getattr(text_cfg, "torch_dtype", None) or getattr(text_cfg, "dtype", None)
             if isinstance(cfg_dtype, str):
                 cfg_dtype = getattr(torch, cfg_dtype, None)
             dtype = cfg_dtype if isinstance(cfg_dtype, torch.dtype) else torch.float16
@@ -230,25 +236,99 @@ class AirLLMBaseModel:
 
         walk(self.config)
 
+    def _model_matches_layer_names(self, model):
+        """True when the instantiated class actually has the modules we plan to stream.
+
+        Auto factories key off ``model_type``, so a VL checkpoint can land on a text-only or
+        backbone class whose tree doesn't match ``layer_names_dict``. Reject those and keep trying.
+        """
+        try:
+            for key in ('embed', 'layer_prefix', 'norm', 'lm_head'):
+                mod = model
+                for attr in self.layer_names_dict[key].split('.'):
+                    mod = getattr(mod, attr)
+            return True
+        except AttributeError:
+            return False
+
+    def _auto_model_classes(self):
+        """Auto* factories to try, in order, when building the empty model.
+
+        ``AutoModelForCausalLM`` maps some VL model_types (notably ``qwen3_5``) onto a text-only
+        ``*ForCausalLM`` class. That class expects a text config and either crashes or builds a
+        model whose module names don't match the checkpoint. Conditional-generation architectures
+        therefore try the image-text factories first.
+        """
+        archs = getattr(self.config, "architectures", None) or []
+        arch = archs[0] if archs else ""
+        names = []
+        if any(tag in arch for tag in ("ConditionalGeneration", "ImageTextToText", "Multimodal")):
+            names.extend(["AutoModelForImageTextToText", "AutoModelForMultimodalLM"])
+        names.extend([
+            "AutoModelForCausalLM",
+            "AutoModelForImageTextToText",
+            "AutoModelForMultimodalLM",
+            "AutoModel",
+        ])
+        seen = set()
+        classes = []
+        for name in names:
+            if name in seen:
+                continue
+            seen.add(name)
+            cls = getattr(transformers, name, None)
+            if cls is not None:
+                classes.append((name, cls))
+        return classes
+
+    def _instantiate_on_meta(self, attn_implementation):
+        """Build the transformers model on the meta device for one attention implementation."""
+        self._propagate_attn_implementation(attn_implementation)
+        kwargs = {
+            "attn_implementation": attn_implementation,
+            "trust_remote_code": self.trust_remote_code,
+        }
+        errors = []
+        for name, cls in self._auto_model_classes():
+            try:
+                with init_empty_weights(include_buffers=False):
+                    model = cls.from_config(self.config, **kwargs)
+            except TypeError:
+                # Older Auto factories don't take attn_implementation.
+                try:
+                    with init_empty_weights(include_buffers=False):
+                        model = cls.from_config(self.config, trust_remote_code=self.trust_remote_code)
+                except Exception as e:  # noqa: BLE001 - try the next factory
+                    errors.append(f"{name}: {type(e).__name__}: {e}")
+                    continue
+            except Exception as e:  # noqa: BLE001 - try the next factory
+                errors.append(f"{name}: {type(e).__name__}: {e}")
+                continue
+            if not self._model_matches_layer_names(model):
+                errors.append(
+                    f"{name}: built {type(model).__name__} but it is missing "
+                    f"{self.layer_names_dict['layer_prefix']}"
+                )
+                continue
+            print(f"built empty {type(model).__name__} via {name} (attn={attn_implementation})")
+            return model
+        raise RuntimeError(
+            "Could not instantiate the model on meta from config. "
+            f"architecture={getattr(self.config, 'architectures', None)} "
+            f"model_type={getattr(self.config, 'model_type', None)}. "
+            f"Tried: {'; '.join(errors)}"
+        )
+
     def init_model(self):
         # Build the real model on meta (no memory). include_buffers=False so non-persistent
         # buffers such as rotary inv_freq are actually computed (they aren't in the checkpoint).
-        self.model = None
         try:
-            self._propagate_attn_implementation("sdpa")
-            with init_empty_weights(include_buffers=False):
-                self.model = AutoModelForCausalLM.from_config(
-                    self.config, attn_implementation="sdpa", trust_remote_code=self.trust_remote_code)
-        except (ValueError, TypeError) as e:
+            self.model = self._instantiate_on_meta("sdpa")
+        except Exception as e:
             print(f"attn_implementation='sdpa' not available ({e}), falling back to eager attention")
-            self.model = None
-        if self.model is None:
             # Some (often remote-code) architectures don't support sdpa and also default to it, so we
             # must request eager explicitly; otherwise transformers re-selects sdpa and errors again.
-            self._propagate_attn_implementation("eager")
-            with init_empty_weights(include_buffers=False):
-                self.model = AutoModelForCausalLM.from_config(
-                    self.config, attn_implementation="eager", trust_remote_code=self.trust_remote_code)
+            self.model = self._instantiate_on_meta("eager")
 
         quantization_config = getattr(self.config, "quantization_config", None)
         if quantization_config is None:
