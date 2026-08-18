@@ -15,12 +15,12 @@ for _readme in (os.path.join(here, "README.md"), os.path.join(here, os.pardir, "
 
 setuptools.setup(
     name="airllm",
-    version="3.1.0",
+    version="3.2.0",
     author="Gavin Li",
     author_email="gavinli@animaai.cloud",
     description="AirLLM runs 70B large language models on a single 4GB GPU without quantization, "
                 "distillation or pruning. 405B Llama 3.1 on 8GB, DeepSeek-V3 671B on ~12GB, "
-                "Kimi K3 2.8T on under 4GB.",
+                "Kimi K3 2.8T on under 4GB, Qwen3.8-27B on 3.3GB.",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/lyogavin/airllm",
