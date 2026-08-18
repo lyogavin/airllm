@@ -1,5 +1,6 @@
 import gc
 import json
+import math
 import os
 import ctypes
 import shutil
@@ -117,6 +118,43 @@ def layer_tensor_names(local_path, layer_name):
     """List the tensors in a layer shard without reading any tensor data."""
     with safe_open(str(Path(local_path) / (layer_name + ".safetensors")), framework="pt") as f:
         return list(f.keys())
+
+
+_SAFETENSORS_DTYPE_BYTES = {
+    'BOOL': 1,
+    'U8': 1,
+    'I8': 1,
+    'F8_E4M3': 1,
+    'F8_E4M3FN': 1,
+    'F8_E5M2': 1,
+    'F8_E8M0': 1,
+    'F8_E8M0FNU': 1,
+    'U16': 2,
+    'I16': 2,
+    'F16': 2,
+    'BF16': 2,
+    'U32': 4,
+    'I32': 4,
+    'F32': 4,
+    'U64': 8,
+    'I64': 8,
+    'F64': 8,
+}
+
+
+def layer_tensor_sizes(local_path, layer_name):
+    """Return each tensor's serialized byte size without reading its data."""
+    sizes = {}
+    with safe_open(str(Path(local_path) / (layer_name + ".safetensors")), framework="pt") as f:
+        for key in f.keys():
+            tensor = f.get_slice(key)
+            dtype = tensor.get_dtype()
+            try:
+                element_size = _SAFETENSORS_DTYPE_BYTES[dtype]
+            except KeyError as exc:
+                raise ValueError(f"Unsupported safetensors dtype {dtype!r} for {key}") from exc
+            sizes[key] = math.prod(tensor.get_shape()) * element_size
+    return sizes
 
 
 def load_layer_subset(local_path, layer_name, keys):
@@ -283,6 +321,8 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     else:
         n_layers = len(set([int(k[len(layer_names['layer_prefix']):].split('.')[1]) for k in index.keys() if layer_names['layer_prefix'] in k]))
 
+    layer_selectors = {}
+
     if layer_names is None:
         layers = ['model.embed_tokens.'] + [f'model.layers.{i}.' for i in range(n_layers)] + ['model.norm.', 'lm_head.']
     else:
@@ -296,10 +336,24 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         layers = layers + list(layer_names.get('resident', []))
         layers = [l + "." for l in layers]
 
+        # Some native checkpoints flatten a small logical module into several top-level keys
+        # instead of a dotted prefix. ``groups`` gives those keys one normal AirLLM shard without
+        # forcing an adapter to copy or rewrite the rest of the checkpoint.
+        for output_name, selectors in layer_names.get('groups', {}).items():
+            output_layer = output_name + "."
+            layers.append(output_layer)
+            layer_selectors[output_layer] = tuple(selectors)
+
+    def _belongs_to_layer(key, layer):
+        selectors = layer_selectors.get(layer)
+        if selectors is None:
+            return key.startswith(layer)
+        return any(key == selector or key.startswith(selector + '.') for selector in selectors)
+
     # Drop layers that have no weights in the checkpoint. This happens for tied embeddings,
     # where lm_head shares storage with embed_tokens and has no entry of its own. Without this we
     # would try to save an empty shard (which fails) and never detect the split as complete.
-    layers = [l for l in layers if any(k.startswith(l) for k in index.keys())]
+    layers = [l for l in layers if any(_belongs_to_layer(k, l) for k in index.keys())]
 
     # Split in ascending shard order. The loop below only ever walks the shard counter forward, so
     # a module whose weights sit in an earlier shard than its predecessor's would silently be saved
@@ -308,7 +362,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     # so plain embed -> layers -> norm -> lm_head checkpoints keep their existing order.
     def _last_shard_of(layer):
         nums = [int(v.split('-')[1]) for k, v in index.items()
-                if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
+                if _belongs_to_layer(k, layer) and '-' in v and len(v.split('-')) > 1]
         return max(nums) if nums else -1
 
     layers.sort(key=_last_shard_of)
@@ -346,11 +400,11 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         for k, v in index.items():
             shard_contents[v].append(k)
         for layer in layers:
-            files = {v for k, v in index.items() if k.startswith(layer)}
+            files = {v for k, v in index.items() if _belongs_to_layer(k, layer)}
             if len(files) != 1:
                 continue
             only_file = next(iter(files))
-            if all(k.startswith(layer) for k in shard_contents[only_file]):
+            if all(_belongs_to_layer(k, layer) for k in shard_contents[only_file]):
                 passthrough[layer] = only_file
 
     if passthrough:
@@ -406,7 +460,8 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
         # Optionnally load next shard
         # checking whether after spliting from '-', if second element exists. otherwise it throws errors for single 'model.safetensor' files
-        shards = [int(v.split('-')[1]) for k, v in index.items() if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
+        shards = [int(v.split('-')[1]) for k, v in index.items()
+                  if _belongs_to_layer(k, layer) and '-' in v and len(v.split('-')) > 1]
         if len(shards) > 0:
             # A layer can span several shards (especially fp8 checkpoints, where each weight has a
             # companion weight_scale_inv tensor). Load *every* shard up to the highest one this layer
@@ -436,7 +491,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                     state_dict.update(load_file(to_load, device='cpu'))
 
         else:
-            shards = [v for k, v in index.items() if k.startswith(layer)]
+            shards = [v for k, v in index.items() if _belongs_to_layer(k, layer)]
             single_modelfile = shards[0]
             to_load = checkpoint_path / single_modelfile
             # check if to_load exist, if not downloaad it...
@@ -450,7 +505,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                 state_dict.update(load_file(to_load, device='cpu'))
 
         # Get layer state dict
-        layer_state_dict = dict([(k, v) for k, v in state_dict.items() if k.startswith(layer)])
+        layer_state_dict = {k: v for k, v in state_dict.items() if _belongs_to_layer(k, layer)}
 
         layer_state_dict = compress_layer_state_dict(layer_state_dict, compression)
 

@@ -72,6 +72,11 @@ class AirLLMBaseModel:
     # Layers larger than this are loaded into ordinary pageable memory instead.
     max_pinned_layer_bytes = 2 * 1024 ** 3
 
+    # Conservative default for existing adapters. Models with bounded streamed-layer allocations
+    # can opt out so CUDA reuses those blocks instead of synchronizing and returning them to the
+    # driver after every layer.
+    clean_memory_after_layer = True
+
     # Subclasses override this to point at non-standard module names.
     def set_layer_names_dict(self):
         self.layer_names_dict = {'embed': 'model.embed_tokens',
@@ -128,11 +133,17 @@ class AirLLMBaseModel:
 
         self.set_layer_names_dict()
 
+        # Most checkpoints use the same names as the runtime model. A few native releases use a
+        # different on-disk namespace, though; keep the runtime names for module traversal and hand
+        # the checkpoint names to the splitter. Subclasses can provide an ``aliases`` mapping for
+        # shard lookup without teaching the generic loader model-specific renames.
+        self.checkpoint_layer_names_dict = self.layer_names_dict.get('checkpoint', self.layer_names_dict)
+
         self.model_local_path, self.checkpoint_path = find_or_create_local_splitted_path(
             model_local_path_or_repo_id,
             layer_shards_saving_path,
             compression=compression,
-            layer_names=self.layer_names_dict,
+            layer_names=self.checkpoint_layer_names_dict,
             hf_token=hf_token,
             delete_original=delete_original)
 
@@ -333,9 +344,22 @@ class AirLLMBaseModel:
 
     # ---- weight streaming -------------------------------------------------------------------
 
+    def _checkpoint_layer_name(self, runtime_layer_name):
+        """Return the shard name corresponding to a runtime module name."""
+        aliases = self.checkpoint_layer_names_dict.get('aliases', {})
+        if runtime_layer_name in aliases:
+            return aliases[runtime_layer_name]
+
+        runtime_prefix = self.layer_names_dict['layer_prefix']
+        checkpoint_prefix = self.checkpoint_layer_names_dict['layer_prefix']
+        if runtime_layer_name.startswith(runtime_prefix + '.'):
+            return checkpoint_prefix + runtime_layer_name[len(runtime_prefix):]
+        return runtime_layer_name
+
     def load_layer_to_cpu(self, layer_name):
         t = time.time()
-        load_layer_output = load_layer(self.checkpoint_path, layer_name, self.profiling_mode)
+        checkpoint_layer_name = self._checkpoint_layer_name(layer_name)
+        load_layer_output = load_layer(self.checkpoint_path, checkpoint_layer_name, self.profiling_mode)
         elapsed_time = time.time() - t
 
         if self.profiling_mode:
@@ -606,12 +630,25 @@ class AirLLMBaseModel:
         self._streamed_set = set(self._streamed_indices)
 
         self._setup_expert_streaming()
+        resident_indices = list(self._configure_streaming_policy())
+        for idx in resident_indices:
+            self.move_layer_to_device(self._load_streamed_layer(idx))
+        if resident_indices:
+            resident_set = set(resident_indices)
+            self._streamed_indices = [
+                idx for idx in self._streamed_indices if idx not in resident_set
+            ]
+            self._streamed_set = set(self._streamed_indices)
 
         for idx in self._streamed_indices:
             module = self.layers[idx]
             module._airllm_idx = idx
             module.register_forward_pre_hook(self._pre_hook)
             module.register_forward_hook(self._post_hook)
+
+    def _configure_streaming_policy(self):
+        """Configure adapter-specific streaming and return modules to keep resident."""
+        return ()
 
     # ---- per-expert streaming ---------------------------------------------------------------
 
@@ -741,7 +778,8 @@ class AirLLMBaseModel:
                 set_module_tensor_to_device(self.model, param_name, 'meta')
         else:
             module.to('meta')
-        clean_memory()
+        if self.clean_memory_after_layer:
+            clean_memory()
         return output
 
     # ---- delegation to the underlying transformers model ------------------------------------
