@@ -1,0 +1,31 @@
+name: Bug Report
+description: Create a report to help us improve AirLLM inference
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe what happened. Include the full stack trace if you received an error (like MetadataIncompleteBuffer).
+      placeholder: I tried to run inference on Model X with 4bit compression, but the process crashed with...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Give us the exact snippet of python code to run so we can reproduce it.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Crucial for debugging memory issues! What OS, GPU model, VRAM size, python version, and bitsandbytes version were you using?
+    validations:
+      required: true

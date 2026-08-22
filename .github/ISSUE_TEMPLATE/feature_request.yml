@@ -1,0 +1,26 @@
+name: Feature / Model Request
+description: Request support for a new LLM architecture or an optimization feature
+title: "[FEATURE] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a new idea for AirLLM! 
+        
+        **Note:** If you are specifically requesting support for a *new model architecture*, please also consider filling out the official request form: [Request Model Support](https://docs.google.com/forms/d/e/1FAIpQLSe0Io9ANMT964Zi-OQOq1TJmnvP-G3_ZgQDhP7SatN0IEdbOg/viewform?usp=sf_link)
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the feature or model
+      description: If requesting a new model, provide the Huggingface repository URI.
+      placeholder: Ex. Support inferencing for Llama 3.1 405B on 8GB...
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Why is this important?
+      description: Explain the motivation.
+    validations:
+      required: false
