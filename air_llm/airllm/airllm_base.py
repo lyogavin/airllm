@@ -82,7 +82,8 @@ class AirLLMBaseModel:
 
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
-                 hf_token=None, prefetching=True, delete_original=False):
+                 hf_token=None, prefetching=True, delete_original=False,
+                 load_resident_modules=True):
         """
         Parameters
         ----------
@@ -108,6 +109,10 @@ class AirLLMBaseModel:
             overlap the next layer's disk load with the current layer's compute
         delete_original: bool, optional
             delete the original downloaded checkpoint after splitting to save disk space
+        load_resident_modules: bool, optional
+            load non-streamed modules such as a multimodal vision tower, by default True. Set this
+            to False for text-only inference when those modules would otherwise waste VRAM. Inputs
+            that need a skipped module will fail until the model is recreated with this enabled.
         """
 
         self.profiling_mode = profiling_mode
@@ -124,6 +129,7 @@ class AirLLMBaseModel:
 
         self.compression = compression
         self.hf_token = hf_token
+        self.load_resident_modules = load_resident_modules
 
         restore_relocated_transformers_symbols()
 
@@ -727,6 +733,12 @@ class AirLLMBaseModel:
         the meta device and fail the moment they run. They are small (well under a GB), so we load
         them once and leave them resident.
         """
+        if not self.load_resident_modules:
+            resident = self.layer_names_dict.get('resident', [])
+            if resident:
+                print(f"text-only mode: leaving resident modules on meta: {', '.join(resident)}")
+            return
+
         for name in self.layer_names_dict.get('resident', []):
             try:
                 state_dict = self.load_layer_to_cpu(name)

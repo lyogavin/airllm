@@ -14,6 +14,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 import torch
 from safetensors.torch import save_file, load_file
@@ -31,6 +32,7 @@ from airllm.persist.safetensor_model_persister import SafetensorModelPersister
 _persister_mod.model_persister = SafetensorModelPersister()
 
 from airllm.utils import split_and_save_layers
+from airllm.airllm_base import AirLLMBaseModel
 
 N_LAYERS = 4
 LAYER_PREFIX = "model.language_model.layers"
@@ -160,6 +162,16 @@ class TestQwen38Split(unittest.TestCase):
             dst = self._split_file(module)
             self.assertNotIn(os.stat(dst).st_ino, src_inodes,
                              f"{module} was linked, but this layout should be copied")
+
+    def test_text_only_mode_does_not_materialize_resident_vision_tower(self):
+        model = AirLLMBaseModel.__new__(AirLLMBaseModel)
+        model.load_resident_modules = False
+        model.layer_names_dict = {'resident': ['model.visual']}
+        model.load_layer_to_cpu = Mock()
+
+        model._load_resident_modules()
+
+        model.load_layer_to_cpu.assert_not_called()
 
 
 if __name__ == '__main__':

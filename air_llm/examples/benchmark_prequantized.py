@@ -24,8 +24,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--max-new-tokens", type=int, default=2)
     parser.add_argument("--max-seq-len", type=int, default=64)
+    parser.add_argument(
+        "--prompt",
+        default="Answer with one word: what color is a clear daytime sky?",
+    )
+    parser.add_argument("--chat-template", action="store_true")
+    parser.add_argument(
+        "--disable-thinking",
+        action="store_true",
+        help="pass enable_thinking=False to the model's chat template",
+    )
     parser.add_argument("--shard-dir", type=Path)
     parser.add_argument("--no-prefetch", action="store_true")
+    parser.add_argument(
+        "--text-only",
+        action="store_true",
+        help="leave multimodal resident modules (for example a vision tower) on meta",
+    )
     return parser.parse_args()
 
 
@@ -45,6 +60,7 @@ def main() -> None:
             layer_shards_saving_path=str(shard_dir),
             profiling_mode=True,
             prefetching=not args.no_prefetch,
+            load_resident_modules=not args.text_only,
         )
         tokenizer = model.tokenizer
     else:
@@ -57,15 +73,30 @@ def main() -> None:
         model.eval()
     load_seconds = time.perf_counter() - started
 
-    prompt = "Answer with one word: what color is a clear daytime sky?"
-    encoded = tokenizer(
-        prompt,
-        return_tensors="pt",
-        truncation=True,
-        max_length=args.max_seq_len,
-        padding=False,
-    )
+    if args.chat_template:
+        template_kwargs = {"enable_thinking": False} if args.disable_thinking else {}
+        encoded = tokenizer.apply_chat_template(
+            [{"role": "user", "content": args.prompt}],
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            truncation=True,
+            max_length=args.max_seq_len,
+            **template_kwargs,
+        )
+    else:
+        encoded = tokenizer(
+            args.prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=args.max_seq_len,
+            padding=False,
+        )
     input_ids = encoded["input_ids"].to(args.device)
+    attention_mask = encoded.get("attention_mask")
+    if attention_mask is not None:
+        attention_mask = attention_mask.to(args.device)
 
     if using_cuda:
         torch.cuda.reset_peak_memory_stats()
@@ -74,6 +105,7 @@ def main() -> None:
     started = time.perf_counter()
     output = model.generate(
         input_ids,
+        attention_mask=attention_mask,
         max_new_tokens=args.max_new_tokens,
         do_sample=False,
         use_cache=True,
@@ -95,6 +127,9 @@ def main() -> None:
         "tokens_per_second": round(generated_tokens / generation_seconds, 4),
         "peak_process_rss_mib": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1),
         "output": tokenizer.decode(sequences[0], skip_special_tokens=True),
+        "generated_text": tokenizer.decode(
+            sequences[0, input_ids.shape[-1]:], skip_special_tokens=True
+        ),
     }
     if args.engine == "airllm" and getattr(model, "profiler", None) is not None:
         result["profile_seconds"] = {

@@ -10,8 +10,8 @@ class AirLLMQwen3_5(AirLLMBaseModel):
 
     Transformers ignores the checkpoint's ``mtp.*`` Multi-Token Prediction head
     (``_keys_to_ignore_on_load_unexpected``), so we do not stream or load it. The vision tower is
-    kept resident: text-only ``generate()`` never runs it, but leaving it on meta would crash the
-    moment a caller passes ``pixel_values``.
+    kept resident by default. On a small GPU, pass ``load_resident_modules=False`` for text-only
+    generation; image/video inputs then remain unavailable because the tower stays on ``meta``.
 
     Needs transformers 5.8+ (the class is in-tree; this repo ships no remote modeling code).
     Optional CUDA kernels ``fla`` / ``causal-conv1d`` speed up DeltaNet; transformers falls back
