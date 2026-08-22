@@ -716,6 +716,15 @@ class AirLLMBaseModel:
             return
         if type(ModelPersister.get_model_persister()).__name__ != 'SafetensorModelPersister':
             return
+        if self.compression is not None:
+            # Per-expert loading reads tensors straight out of the shard with load_layer_subset(),
+            # which -- unlike load_layer() -- does not run uncompress_layer_state_dict(). With
+            # compression on, the shard holds a quantized payload plus companion .4bit./.8bit.
+            # quant-state tensors, so streaming subsets of it would hand still-quantized weights to
+            # move_layer_to_device(). Fall back to whole-layer streaming, which does decompress.
+            print("per-expert streaming is not supported together with compression for now; "
+                  "streaming whole layers instead.")
+            return
 
         layer_prefix = self.layer_names_dict['layer_prefix']
         hooked = 0
