@@ -1,6 +1,4 @@
 
-from transformers import GenerationConfig
-
 from .airllm_base import AirLLMBaseModel
 
 
@@ -15,9 +13,6 @@ class AirLLMChatGLM(AirLLMBaseModel):
 
     def get_use_better_transformer(self):
         return False
-
-    def get_generation_config(self):
-        return GenerationConfig()
 
     def get_sequence_len(self, seq):
         return seq.shape[0]
