@@ -196,12 +196,43 @@ def compress_layer_state_dict(layer_state_dict, compression=None):
     return compressed_layer_state_dict if compressed_layer_state_dict is not None else layer_state_dict
 
 def remove_real_and_linked_file(to_delete):
-    if (os.path.realpath(to_delete) != to_delete):
+    """Remove a file, following symlinks to also remove the target if present.
+
+    If *to_delete* is a symlink the resolved target is removed after the link
+    itself.  For regular files the function simply deletes the file.
+
+    .. warning::
+       When removing symlinks in Hugging Face cache directories, the resolved
+       target may be shared across snapshots or revisions.  Deleting it will
+       break other snapshots that still reference the same blob.
+
+    Parameters
+    ----------
+    to_delete : str | Path
+        Path to the file (or symlink) to remove.
+    """
+    to_delete = os.fspath(to_delete)
+    targetpath = None
+
+    # Only treat the path as "linked" when it's actually a symlink; realpath()
+    # can also differ for non-symlink paths (e.g., ".." components).
+    if os.path.islink(to_delete):
         targetpath = os.path.realpath(to_delete)
 
-    os.remove(to_delete)
-    if (targetpath):
-         os.remove(targetpath)
+    # Remove the primary path (symlink or regular file).
+    try:
+        os.remove(to_delete)
+    except FileNotFoundError:
+        return
+
+    # If it was a symlink, also remove the resolved target so we don't leave
+    # orphaned blobs on disk.  Wrap in try/except for TOCTOU safety — another
+    # process may have already removed the target.
+    if targetpath is not None:
+        try:
+            os.remove(targetpath)
+        except FileNotFoundError:
+            pass
 
 
 
