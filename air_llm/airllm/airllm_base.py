@@ -3,10 +3,12 @@ from typing import List, Optional, Tuple, Union
 from tqdm import tqdm
 from pathlib import Path
 import time
+import math
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
 import transformers
+from safetensors import safe_open
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
 from transformers.generation import GenerationMixin
 from accelerate import init_empty_weights
@@ -14,6 +16,7 @@ from accelerate.utils.modeling import set_module_tensor_to_device
 from transformers.quantizers import AutoHfQuantizer
 
 from .profiler import LayeredProfiler
+from .expert_slot_cache import ExpertHostBank, ExpertSlotRuntime
 
 from .utils import clean_memory, load_layer, layer_tensor_names, load_layer_subset, \
     find_or_create_local_splitted_path
@@ -82,7 +85,8 @@ class AirLLMBaseModel:
 
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
-                 hf_token=None, prefetching=True, delete_original=False):
+                 hf_token=None, prefetching=True, delete_original=False,
+                 expert_cache_gb=0.0, expert_cache_backend="none"):
         """
         Parameters
         ----------
@@ -108,6 +112,12 @@ class AirLLMBaseModel:
             overlap the next layer's disk load with the current layer's compute
         delete_original: bool, optional
             delete the original downloaded checkpoint after splitting to save disk space
+        expert_cache_gb: float, optional
+            GPU-memory budget, in GiB, for fixed PhiMoE expert slots.
+        expert_cache_backend: str, optional
+            ``"slot"`` explicitly selects the PhiMoE fixed-slot runtime with resident dense
+            weights and an eager host expert bank. The default ``"none"`` preserves AirLLM's
+            existing immediate expert eviction.
         """
 
         self.profiling_mode = profiling_mode
@@ -125,9 +135,43 @@ class AirLLMBaseModel:
         self.compression = compression
         self.hf_token = hf_token
 
+        try:
+            self.expert_cache_gb = float(expert_cache_gb)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("expert_cache_gb must be a finite non-negative number") from exc
+        if not math.isfinite(self.expert_cache_gb) or self.expert_cache_gb < 0:
+            raise ValueError("expert_cache_gb must be a finite non-negative number")
+        self.expert_cache_capacity_bytes = int(self.expert_cache_gb * 1024 ** 3)
+        self.expert_cache_backend = (
+            "none" if expert_cache_backend is None else str(expert_cache_backend).lower()
+        )
+        if self.expert_cache_backend not in ("none", "slot"):
+            raise ValueError("expert_cache_backend must be 'none' or 'slot'")
+        if self.expert_cache_backend == "none" and self.expert_cache_capacity_bytes:
+            raise ValueError("expert_cache_gb requires expert_cache_backend='slot'")
+        if self.expert_cache_backend == "slot":
+            if not self.expert_cache_capacity_bytes:
+                raise ValueError("expert_cache_backend='slot' requires expert_cache_gb > 0")
+            if compression is not None:
+                raise ValueError("expert_cache_backend='slot' does not support compressed shards")
+
         restore_relocated_transformers_symbols()
 
         self.set_layer_names_dict()
+
+        self.running_device = device
+        self.device = torch.device(self.running_device)
+        if self.expert_cache_backend == "slot":
+            if self.device.type != "cuda" or not torch.cuda.is_available():
+                raise ValueError("expert_cache_gb requires a CUDA-compatible device (CUDA or ROCm)")
+            if not self.layer_names_dict.get("expert_prefix"):
+                raise ValueError(
+                    "expert_cache_gb requires a model adapter with per-expert streaming support"
+                )
+        if self.expert_cache_backend == "slot" and not self.supports_expert_slot_backend():
+            raise ValueError(
+                "expert_cache_backend='slot' is currently supported only by the PhiMoE adapter"
+            )
 
         self.model_local_path, self.checkpoint_path = find_or_create_local_splitted_path(
             model_local_path_or_repo_id,
@@ -136,9 +180,6 @@ class AirLLMBaseModel:
             layer_names=self.layer_names_dict,
             hf_token=hf_token,
             delete_original=delete_original)
-
-        self.running_device = device
-        self.device = torch.device(self.running_device)
 
         # Prefer transformers' native implementation; only trust the model's bundled remote code when
         # transformers doesn't recognize the architecture. Vendored remote code is frequently pinned
@@ -175,6 +216,10 @@ class AirLLMBaseModel:
 
         # prefetch executor / state
         self.prefetching = prefetching
+        if self.expert_cache_backend == "slot" and self.prefetching:
+            print("layer prefetching is unnecessary with resident slot-backend dense weights; "
+                  "disabling the ordinary layer prefetcher.")
+            self.prefetching = False
         if self.compression is not None and self.prefetching:
             print("prefetching is not supported together with compression for now; disabling prefetching.")
             self.prefetching = False
@@ -198,9 +243,17 @@ class AirLLMBaseModel:
 
         self.set_layers_from_layer_names()
         self._load_resident_modules()
+        self._expert_slot_runtime = None
         self._install_streaming_hooks()
+        if self.expert_cache_backend == "slot" and not self._expert_streaming:
+            raise ValueError(
+                "expert_cache_gb was requested, but no per-expert safetensor modules were found"
+            )
 
     # ---- customization hooks for subclasses -------------------------------------------------
+
+    def supports_expert_slot_backend(self):
+        return False
 
     def get_generation_config(self):
         try:
@@ -685,7 +738,11 @@ class AirLLMBaseModel:
 
         self._streamed_set = set(self._streamed_indices)
 
-        self._setup_expert_streaming()
+        self._setup_expert_streaming(install_hooks=self.expert_cache_backend == "none")
+
+        if self.expert_cache_backend == "slot":
+            self._initialize_expert_slot_runtime()
+            return
 
         for idx in self._streamed_indices:
             module = self.layers[idx]
@@ -695,7 +752,7 @@ class AirLLMBaseModel:
 
     # ---- per-expert streaming ---------------------------------------------------------------
 
-    def _setup_expert_streaming(self):
+    def _setup_expert_streaming(self, *, install_hooks=True):
         """Stream individual MoE experts instead of whole decoder layers, where that is possible.
 
         A sparse MoE layer holds hundreds of experts but routes each token to a handful of them.
@@ -710,6 +767,7 @@ class AirLLMBaseModel:
         self._expert_streaming = False
         self._expert_keys = {}
         self._non_expert_keys = {}
+        self._expert_param_prefixes = {}
 
         expert_prefix = self.layer_names_dict.get('expert_prefix')
         if not expert_prefix:
@@ -763,15 +821,134 @@ class AirLLMBaseModel:
                     continue
                 expert_module = experts_container[expert_idx]
                 expert_module._airllm_expert = (idx, expert_idx)
-                expert_module.register_forward_pre_hook(self._expert_pre_hook)
-                expert_module.register_forward_hook(self._expert_post_hook)
+                first_key = keys[0]
+                marker_pos = first_key.find(marker)
+                self._expert_param_prefixes[(idx, expert_idx)] = (
+                    first_key[:marker_pos + len(marker)] + str(expert_idx)
+                )
+                if install_hooks:
+                    expert_module.register_forward_pre_hook(self._expert_pre_hook)
+                    expert_module.register_forward_hook(self._expert_post_hook)
                 hooked += 1
 
         if hooked:
             self._expert_streaming = True
             n_layers = len(self._expert_keys)
-            print(f"per-expert streaming enabled: {hooked} experts across {n_layers} layers "
-                  f"load on demand, so only the experts a token routes to are materialised.")
+            if install_hooks:
+                print(f"per-expert streaming enabled: {hooked} experts across {n_layers} layers "
+                      f"load on demand, so only the experts a token routes to are materialised.")
+
+    def _slot_dense_keysets(self):
+        """Return the non-expert checkpoint keys that become permanently GPU resident."""
+        keysets = {}
+        for idx in self._streamed_indices:
+            keys = self._non_expert_keys.get(idx)
+            if keys is None:
+                keys = layer_tensor_names(self.checkpoint_path, self.layer_names[idx])
+            keysets[idx] = keys
+        return keysets
+
+    def _estimate_slot_dense_bytes(self, keysets):
+        """Estimate dense residency at the running dtype without reading tensor payloads."""
+        dtype_bytes = torch.empty((), dtype=self.running_dtype).element_size()
+        total = 0
+        for idx, keys in keysets.items():
+            shard = Path(self.checkpoint_path) / f"{self.layer_names[idx]}.safetensors"
+            with safe_open(str(shard), framework="pt") as handle:
+                for key in keys:
+                    tensor_slice = handle.get_slice(key)
+                    source_dtype = tensor_slice.get_dtype()
+                    if source_dtype not in ("F16", "BF16"):
+                        raise ValueError(
+                            "slot backend requires uncompressed FP16/BF16 dense weights; "
+                            f"{key} is {source_dtype}"
+                        )
+                    total += math.prod(tensor_slice.get_shape()) * dtype_bytes
+        return total
+
+    def _load_slot_dense_weights(self, keysets):
+        moved = []
+        for idx in self._streamed_indices:
+            state_dict = load_layer_subset(
+                self.checkpoint_path,
+                self.layer_names[idx],
+                keysets[idx],
+            )
+            moved.extend(self.move_layer_to_device(state_dict))
+            del state_dict
+        return moved
+
+    def _initialize_expert_slot_runtime(self):
+        """Build the explicit PhiMoE host-bank/fixed-slot execution path."""
+        if not self._expert_streaming:
+            raise ValueError("slot backend found no per-expert safetensor layout")
+        if self.hf_quantizer is not None:
+            raise ValueError("slot backend does not yet support pre-quantized checkpoints")
+        if self.running_dtype not in (torch.float16, torch.bfloat16):
+            raise ValueError("slot backend supports only float16 or bfloat16 runtime dtype")
+
+        host_bank = ExpertHostBank(
+            self.checkpoint_path,
+            self.layer_names,
+            self._expert_keys,
+            self._expert_param_prefixes,
+            self.running_dtype,
+        )
+        keysets = self._slot_dense_keysets()
+        dense_bytes = self._estimate_slot_dense_bytes(keysets)
+        slot_count = self.expert_cache_capacity_bytes // host_bank.expert_bytes
+        if slot_count < 1:
+            raise ValueError(
+                f"expert_cache_gb is smaller than one {host_bank.expert_bytes / 1024 ** 2:.2f} MiB expert"
+            )
+
+        free_bytes, total_bytes = torch.cuda.mem_get_info(self.device)
+        cache_bytes = slot_count * host_bank.expert_bytes
+        scratch_bytes = ExpertSlotRuntime.scratch_slots * host_bank.expert_bytes
+        headroom = max(512 * 1024 ** 2, total_bytes // 10)
+        required = dense_bytes + cache_bytes + scratch_bytes + headroom
+        if required > free_bytes:
+            raise RuntimeError(
+                "insufficient accelerator memory for PhiMoE slot backend: "
+                f"dense={dense_bytes / 1024 ** 2:.1f} MiB, "
+                f"cache={cache_bytes / 1024 ** 2:.1f} MiB, "
+                f"scratch={scratch_bytes / 1024 ** 2:.1f} MiB, "
+                f"required headroom={headroom / 1024 ** 2:.1f} MiB, "
+                f"free={free_bytes / 1024 ** 2:.1f} MiB; lower expert_cache_gb"
+            )
+
+        runtime = None
+        moved = []
+        dense_param_names = [name for keys in keysets.values() for name in keys]
+        try:
+            runtime = ExpertSlotRuntime(host_bank, self.expert_cache_capacity_bytes, self.device)
+            moved = self._load_slot_dense_weights(keysets)
+            runtime.dense_resident_bytes = self._device_storage_bytes(moved) or dense_bytes
+
+            expert_prefix = self.layer_names_dict['expert_prefix']
+            for idx in self._expert_keys:
+                container = self.layers[idx]
+                for attr in expert_prefix.split('.'):
+                    container = getattr(container, attr)
+                container._airllm_slot_runtime = runtime
+                container._airllm_layer_idx = idx
+            self._expert_slot_runtime = runtime
+        except Exception as exc:
+            # ``move_layer_to_device`` can fail partway through a layer before returning its list
+            # of moved names. Inspect every planned dense name so setup remains atomic in that
+            # case too.
+            self._evict_param_names(dense_param_names)
+            if runtime is not None:
+                runtime.close()
+            clean_memory()
+            raise RuntimeError("failed to initialize PhiMoE slot backend") from exc
+
+        print(
+            "PhiMoE slot backend enabled: "
+            f"{host_bank.expert_count} experts / {host_bank.nbytes / 1024 ** 3:.2f} GiB host bank, "
+            f"{runtime.slot_count} fixed GPU cache slots, "
+            f"{runtime.dense_resident_bytes / 1024 ** 3:.2f} GiB dense weights resident."
+        )
 
     def _expert_pre_hook(self, module, args):
         layer_idx, expert_idx = module._airllm_expert
@@ -784,6 +961,72 @@ class AirLLMBaseModel:
             set_module_tensor_to_device(self.model, param_name, 'meta')
         module._airllm_moved = []
         return output
+
+    # ---- fixed-slot lifecycle ---------------------------------------------------------------
+
+    def _resolve_model_tensor(self, param_name):
+        module_path, _, attr = param_name.rpartition('.')
+        try:
+            module = self.model.get_submodule(module_path) if module_path else self.model
+        except AttributeError:
+            return None
+        tensor = module._parameters.get(attr)
+        if tensor is None:
+            tensor = module._buffers.get(attr)
+        return tensor
+
+    def _device_storage_bytes(self, param_names):
+        """Count unique accelerator storages owned by ``param_names``."""
+        storages = {}
+        for param_name in param_names:
+            tensor = self._resolve_model_tensor(param_name)
+            if tensor is None or tensor.device.type == 'meta':
+                continue
+            try:
+                storage = tensor.untyped_storage()
+                storage_key = (tensor.device.type, tensor.device.index, storage.data_ptr())
+                storages[storage_key] = storage.nbytes()
+            except (AttributeError, RuntimeError):
+                # Tensor subclasses may not expose untyped_storage; their logical payload is the
+                # best portable fallback and remains conservative for ordinary parameters.
+                storage_key = (param_name,)
+                storages[storage_key] = tensor.numel() * tensor.element_size()
+        return sum(storages.values())
+
+    def _evict_param_names(self, param_names):
+        for param_name in param_names:
+            tensor = self._resolve_model_tensor(param_name)
+            if tensor is not None and tensor.device.type != 'meta':
+                set_module_tensor_to_device(self.model, param_name, 'meta')
+
+    def get_expert_cache_stats(self):
+        """Return fixed-slot statistics, or a disabled snapshot for normal streaming."""
+        slot_runtime = getattr(self, '_expert_slot_runtime', None)
+        if slot_runtime is not None:
+            return dict(slot_runtime.stats())
+        return {
+            "enabled": False,
+            "backend": "none",
+            "capacity_bytes": 0,
+            "resident_bytes": 0,
+            "resident_experts": 0,
+        }
+
+    def reset_expert_cache_stats(self):
+        """Reset hit/miss counters without changing expert residency."""
+        slot_runtime = getattr(self, '_expert_slot_runtime', None)
+        if slot_runtime is not None:
+            slot_runtime.reset_stats()
+
+    def clear_expert_cache(self):
+        """Synchronize outstanding work and clear logical expert residency."""
+        slot_runtime = getattr(self, '_expert_slot_runtime', None)
+        if slot_runtime is not None:
+            slot_runtime.clear()
+            return
+        if self.device.type == 'cuda' and torch.cuda.is_available():
+            torch.cuda.synchronize(self.device)
+        clean_memory()
 
     def _next_streamed_idx(self, idx):
         nxt = idx + 1
