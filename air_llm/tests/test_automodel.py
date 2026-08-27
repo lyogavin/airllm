@@ -1,31 +1,31 @@
-import sys
+from types import SimpleNamespace
 import unittest
-
-#sys.path.insert(0, '../airllm')
+from unittest.mock import patch
 
 from ..airllm.auto_model import AutoModel
 
 
 
 class TestAutoModel(unittest.TestCase):
-    def setUp(self):
-        pass
-    def tearDown(self):
-        pass
-
     def test_auto_model_should_return_correct_model(self):
+        # Standard Transformers layouts intentionally use the generic streamer since 8f62eec;
+        # only non-standard layouts need an architecture-specific adapter. Mocking config also
+        # keeps this unit test deterministic and independent of Hub/network changes.
         mapping_dict = {
-            'garage-bAInd/Platypus2-7B': 'AirLLMLlama2',
-            'Qwen/Qwen-7B': 'AirLLMQWen',
-            'internlm/internlm-chat-7b': 'AirLLMInternLM',
-            'THUDM/chatglm3-6b-base': 'AirLLMChatGLM',
-            'baichuan-inc/Baichuan2-7B-Base': 'AirLLMBaichuan',
-            'mistralai/Mistral-7B-Instruct-v0.1': 'AirLLMMistral',
-            'mistralai/Mixtral-8x7B-v0.1': 'AirLLMMixtral'
+            'LlamaForCausalLM': 'AirLLMBaseModel',
+            'QWenLMHeadModel': 'AirLLMQWen',
+            'InternLMForCausalLM': 'AirLLMInternLM',
+            'ChatGLMForConditionalGeneration': 'AirLLMChatGLM',
+            'BaichuanForCausalLM': 'AirLLMBaichuan',
+            'MistralForCausalLM': 'AirLLMBaseModel',
+            'MixtralForCausalLM': 'AirLLMBaseModel',
         }
 
-
-        for k,v in mapping_dict.items():
-            module, cls = AutoModel.get_module_class(k)
-            self.assertEqual(cls, v, f"expecting {v}")
-
+        for architecture, expected in mapping_dict.items():
+            with self.subTest(architecture=architecture), patch(
+                "airllm.auto_model.AutoConfig.from_pretrained",
+                return_value=SimpleNamespace(architectures=[architecture]),
+            ):
+                module, cls = AutoModel.get_module_class("unused")
+            self.assertEqual(module, "airllm")
+            self.assertEqual(cls, expected)
