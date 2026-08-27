@@ -824,7 +824,30 @@ class AirLLMBaseModel:
         clean_memory()
         return output
 
+    # ---- lifecycle management ----------------------------------------------------------------
+
+    def close(self):
+        """Shut down the prefetch executor and release background resources.
+
+        Call this when you are done with the model to avoid leaking threads.
+        Safe to call multiple times.
+        """
+        if self._prefetch_future is not None:
+            self._prefetch_future.cancel()
+            self._prefetch_future = None
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
+            self._executor = None
+
+    def __del__(self):
+        # Safety net: clean up if the user forgot to call close().
+        try:
+            self.close()
+        except Exception:
+            pass
+
     # ---- delegation to the underlying transformers model ------------------------------------
+
 
     def generate(self, *args, **kwargs):
         return self.model.generate(*args, **kwargs)
