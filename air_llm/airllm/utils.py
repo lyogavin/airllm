@@ -1,6 +1,7 @@
 import gc
 import json
 import os
+import re
 import ctypes
 import shutil
 from tqdm import tqdm
@@ -9,6 +10,7 @@ from glob import glob
 import time
 
 from collections import OrderedDict, defaultdict
+from contextlib import contextmanager
 from typing import Dict, List, Optional, Tuple, Union
 from sys import platform
 
@@ -112,6 +114,297 @@ def uncompress_layer_state_dict(layer_state_dict):
         del layer_state_dict
 
     return layer_state_dict if uncompressed_layer_state_dict is None else uncompressed_layer_state_dict
+
+
+# Qwen4-Exp / Flash-Next stores the ~51B PLE n-gram table as ``*.ngram_embedding.shard_N.weight``.
+# Transformers concatenates those shards into a single ``nn.Embedding.weight`` at load time.
+# On machines that cannot hold ~102GB of host RAM we instead stream the shards into a file-backed
+# mmap and gather rows from disk (the modeling code already looks up on ``weight.device``).
+_NGRAM_SHARD_RE = re.compile(r'^(?P<prefix>.*\.ngram_embedding)\.shard_(?P<idx>\d+)\.weight$')
+_DTYPE_TAGS = {
+    torch.bfloat16: 'bf16',
+    torch.float16: 'fp16',
+    torch.float32: 'fp32',
+}
+_TAG_DTYPES = {tag: dtype for dtype, tag in _DTYPE_TAGS.items()}
+
+
+def merge_ngram_embedding_shards(state_dict):
+    """Concatenate ``ngram_embedding.shard_N.weight`` tensors into ``ngram_embedding.weight``.
+
+    Keys that are not n-gram shards pass through unchanged. Shard indices must be a contiguous
+    0..N-1 range; a gap would silently drop rows from the hash table.
+    """
+    groups = {}
+    out = {}
+    for key, value in state_dict.items():
+        match = _NGRAM_SHARD_RE.match(key)
+        if match:
+            groups.setdefault(match.group('prefix'), []).append((int(match.group('idx')), value))
+        else:
+            out[key] = value
+    for prefix, shards in groups.items():
+        shards.sort(key=lambda item: item[0])
+        got = [idx for idx, _ in shards]
+        expected = list(range(len(shards)))
+        if got != expected:
+            raise ValueError(
+                f"ngram embedding shards for {prefix} are not contiguous 0..{len(shards) - 1}: {got}"
+            )
+        out[f'{prefix}.weight'] = torch.cat([tensor for _, tensor in shards], dim=0)
+    return out
+
+
+def load_merged_ngram_embedding(local_path, layer_name):
+    """Load a split n-gram file and concatenate shards without holding two full copies.
+
+    ``load_file`` plus ``torch.cat`` would peak at ~2x the table (~200GB for Flash-Next). This
+    reads one shard at a time into a preallocated host tensor.
+    """
+    filepath = Path(local_path) / (layer_name + ".safetensors")
+    with safe_open(str(filepath), framework="pt") as handle:
+        groups = {}
+        rest = {}
+        for key in handle.keys():
+            match = _NGRAM_SHARD_RE.match(key)
+            if match:
+                groups.setdefault(match.group('prefix'), []).append((int(match.group('idx')), key))
+            else:
+                rest[key] = handle.get_tensor(key)
+        for prefix, shards in groups.items():
+            shards.sort(key=lambda item: item[0])
+            got = [idx for idx, _ in shards]
+            expected = list(range(len(shards)))
+            if got != expected:
+                raise ValueError(
+                    f"ngram embedding shards for {prefix} are not contiguous "
+                    f"0..{len(shards) - 1}: {got}"
+                )
+            shapes = [tuple(handle.get_slice(key).get_shape()) for _, key in shards]
+            first = handle.get_tensor(shards[0][1])
+            dest = first.new_empty((sum(shape[0] for shape in shapes),) + shapes[0][1:])
+            dest[0:shapes[0][0]].copy_(first)
+            del first
+            offset = shapes[0][0]
+            for (_, key), shape in zip(shards[1:], shapes[1:]):
+                piece = handle.get_tensor(key)
+                dest[offset:offset + shape[0]].copy_(piece)
+                offset += shape[0]
+                del piece
+            rest[f'{prefix}.weight'] = dest
+    return rest
+
+
+def ngram_mmap_exists(saving_path, layer_name):
+    return (os.path.exists(str(saving_path / (layer_name + 'mmap')))
+            and os.path.exists(str(saving_path / (layer_name + 'mmap.json')))
+            and os.path.exists(str(saving_path / (layer_name + 'mmap.done'))))
+
+
+def _ngram_shard_items(layer_prefix, index):
+    items = []
+    for key, filename in index.items():
+        if not key.startswith(layer_prefix):
+            continue
+        match = _NGRAM_SHARD_RE.match(key)
+        if not match:
+            continue
+        items.append((int(match.group('idx')), key, filename))
+    items.sort(key=lambda item: item[0])
+    got = [idx for idx, _, _ in items]
+    if got != list(range(len(items))):
+        raise ValueError(
+            f"ngram embedding shards for {layer_prefix} are not contiguous "
+            f"0..{len(items) - 1}: {got}"
+        )
+    return items
+
+
+def persist_ngram_mmap(layer_prefix, index, checkpoint_path, saving_path,
+                       repo_id=None, hf_token=None):
+    """Stream n-gram shards into a file-backed mmap without holding the full table in RAM."""
+    if ngram_mmap_exists(saving_path, layer_prefix):
+        return
+    items = _ngram_shard_items(layer_prefix, index)
+    if not items:
+        return
+
+    first_file = Path(checkpoint_path) / items[0][2]
+    if not first_file.exists():
+        assert repo_id is not None
+        huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(first_file),
+                                          token=hf_token)
+
+    open_handles = {}
+    try:
+        def _handle(filename):
+            path = str(Path(checkpoint_path) / filename)
+            if path not in open_handles:
+                src = Path(checkpoint_path) / filename
+                if not src.exists():
+                    assert repo_id is not None
+                    huggingface_hub.snapshot_download(
+                        repo_id, allow_patterns=os.path.basename(src), token=hf_token)
+                cm = safe_open(path, framework='pt')
+                open_handles[path] = (cm, cm.__enter__())
+            return open_handles[path][1]
+
+        def _tensor(filename, key):
+            return _handle(filename).get_tensor(key)
+
+        first = _tensor(items[0][2], items[0][1])
+        cols = first.shape[1]
+        dtype = first.dtype
+        if dtype not in _DTYPE_TAGS:
+            raise ValueError(f"unsupported n-gram mmap dtype {dtype}")
+        rows = first.shape[0]
+        shapes_rest = []
+        for _, key, filename in items[1:]:
+            shapes_rest.append(tuple(_handle(filename).get_slice(key).get_shape()))
+            rows += shapes_rest[-1][0]
+
+        raw_path = Path(saving_path) / (layer_prefix + 'mmap')
+        tmp_path = Path(saving_path) / (layer_prefix + 'mmap.tmp')
+        nbytes = rows * cols * first.element_size()
+        print(f"writing n-gram mmap ({rows} x {cols} {_DTYPE_TAGS[dtype]}, "
+              f"{nbytes / (1024 ** 3):.1f}GB) to {raw_path}")
+        with open(tmp_path, 'wb') as out:
+            out.write(first.contiguous().view(torch.uint8).numpy().tobytes())
+            del first
+            for (_, key, filename), shape in zip(items[1:], shapes_rest):
+                piece = _tensor(filename, key)
+                if tuple(piece.shape) != shape:
+                    raise ValueError(f"{key} shape {tuple(piece.shape)} != {shape}")
+                out.write(piece.contiguous().view(torch.uint8).numpy().tobytes())
+                del piece
+        tmp_path.replace(raw_path)
+        meta = {
+            'rows': rows,
+            'cols': cols,
+            'dtype': _DTYPE_TAGS[dtype],
+            'nbytes': nbytes,
+        }
+        with open(Path(saving_path) / (layer_prefix + 'mmap.json'), 'w') as f:
+            json.dump(meta, f)
+        (Path(saving_path) / (layer_prefix + 'mmap.done')).touch()
+        print(f"saved n-gram mmap as: {raw_path}")
+    finally:
+        for cm, _handle_obj in open_handles.values():
+            cm.__exit__(None, None, None)
+
+
+def open_ngram_mmap_table(local_path, layer_name):
+    """Map a persisted n-gram table without copying it into anonymous RAM."""
+    meta_path = Path(local_path) / (layer_name + '.mmap.json')
+    raw_path = Path(local_path) / (layer_name + '.mmap')
+    meta = json.loads(meta_path.read_text())
+    dtype = _TAG_DTYPES[meta['dtype']]
+    rows, cols, nbytes = meta['rows'], meta['cols'], meta['nbytes']
+    storage = torch.UntypedStorage.from_file(str(raw_path), shared=True, nbytes=nbytes)
+    table = torch.tensor([], dtype=dtype)
+    table.set_(storage, 0, (rows, cols))
+    return table
+
+
+class MmapEmbedding(nn.Module):
+    """``nn.Embedding`` stand-in over a file-backed CPU table.
+
+    The table is a plain attribute, not a parameter or buffer, so a parent decoder layer's
+    ``module.to('meta')`` cannot evict it. A zero-size ``weight`` lives on CPU so modeling code
+    that gathers on ``self.ngram_embedding.weight.device`` still runs the lookup on the host.
+    """
+
+    def __init__(self, table):
+        super().__init__()
+        if table.dim() != 2:
+            raise ValueError(f"mmap embedding table must be 2D, got {tuple(table.shape)}")
+        self.num_embeddings, self.embedding_dim = table.shape
+        self._table = table
+        self.weight = nn.Parameter(
+            torch.empty(0, table.shape[1], dtype=table.dtype), requires_grad=False)
+
+    def forward(self, input):
+        return nn.functional.embedding(input, self._table)
+
+
+@contextmanager
+def _force_meta_embeddings():
+    """Construct ``nn.Embedding`` on meta so huge tables never materialize on CPU.
+
+    ``accelerate.init_empty_weights`` allocates each Parameter on CPU and then ``.to('meta')``.
+    That is fine for ordinary weights, but Flash-Next's PLE table is
+    ``nn.Embedding(~320M, 160)`` -- ~191GB of empty fp32 -- which OOMs a 64GB host before the
+    move. Creating the module with ``device=meta`` keeps construction memory-free; AirLLM later
+    replaces this module with a file-backed ``MmapEmbedding``.
+    """
+    orig = torch.nn.Embedding.__init__
+
+    def _init(self, num_embeddings, embedding_dim, *args, **kwargs):
+        kwargs = dict(kwargs)
+        kwargs.setdefault('device', torch.device('meta'))
+        orig(self, num_embeddings, embedding_dim, *args, **kwargs)
+
+    torch.nn.Embedding.__init__ = _init
+    try:
+        yield
+    finally:
+        torch.nn.Embedding.__init__ = orig
+
+
+def _wrap_forward_int64_scatter(orig_forward):
+    """Make ``tensor.scatter(..., index)`` accept int32 indices for one forward.
+
+    Transformers' Qwen4-Exp sparse-attention indexer fills ``selected_token_indices`` as
+    ``int32`` and scatters them into a bool mask. ``torch.Tensor.scatter`` requires ``int64``,
+    so generate crashes on the first sparse-attention layer. The wrap is scoped to that
+    forward so the rest of PyTorch is unchanged.
+    """
+    def forward(self, *args, **kwargs):
+        orig_scatter = torch.Tensor.scatter
+
+        def scatter(tensor, dim, index, *a, **kw):
+            if torch.is_tensor(index) and index.dtype != torch.int64:
+                index = index.to(torch.int64)
+            return orig_scatter(tensor, dim, index, *a, **kw)
+
+        torch.Tensor.scatter = scatter
+        try:
+            return orig_forward(self, *args, **kwargs)
+        finally:
+            torch.Tensor.scatter = orig_scatter
+
+    return forward
+
+
+def cpu_resident_module_names(layer_names, index_keys):
+    """Module prefixes whose weights should stay on CPU after the split.
+
+    ``cpu_resident`` is an explicit list. ``cpu_resident_marker`` (e.g. the Flash-Next PLE table)
+    is scanned out of the checkpoint so we do not have to hard-code which decoder layer owns it.
+    """
+    names = list(layer_names.get('cpu_resident', []))
+    marker = layer_names.get('cpu_resident_marker')
+    if marker:
+        found = []
+        for key in index_keys:
+            pos = key.find(marker)
+            if pos == -1:
+                continue
+            prefix = key[:pos + len(marker)]
+            if prefix not in names and prefix not in found:
+                found.append(prefix)
+        names.extend(found)
+    return names
+
+
+def layer_owner(key, layer_prefixes):
+    """Longest matching prefix wins, so a nested cpu-resident module is not swallowed by its parent."""
+    owner = None
+    for prefix in layer_prefixes:
+        if key.startswith(prefix) and (owner is None or len(prefix) > len(owner)):
+            owner = prefix
+    return owner
+
 
 def layer_tensor_names(local_path, layer_name):
     """List the tensors in a layer shard without reading any tensor data."""
@@ -294,24 +587,29 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         # e.g. a multimodal model's vision tower / projector, or extra top-level norms. They get
         # their own shard and are loaded once and kept resident.
         layers = layers + list(layer_names.get('resident', []))
+        layers = layers + cpu_resident_module_names(layer_names, index.keys())
         layers = [l + "." for l in layers]
 
     # Drop layers that have no weights in the checkpoint. This happens for tied embeddings,
     # where lm_head shares storage with embed_tokens and has no entry of its own. Without this we
     # would try to save an empty shard (which fails) and never detect the split as complete.
     layers = [l for l in layers if any(k.startswith(l) for k in index.keys())]
+    owned = {layer_owner(k, layers) for k in index}
+    layers = [l for l in layers if l in owned]
 
     # Split in ascending shard order. The loop below only ever walks the shard counter forward, so
     # a module whose weights sit in an earlier shard than its predecessor's would silently be saved
     # incomplete. That ordering isn't guaranteed once non-sequential modules (a vision tower, extra
     # norms) are in the list, so sort by the last shard each module touches. This is a stable sort,
     # so plain embed -> layers -> norm -> lm_head checkpoints keep their existing order.
+    # When two modules share a last shard, the longer prefix goes first so a nested cpu-resident
+    # table is extracted before its parent decoder layer can swallow it.
     def _last_shard_of(layer):
         nums = [int(v.split('-')[1]) for k, v in index.items()
                 if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
         return max(nums) if nums else -1
 
-    layers.sort(key=_last_shard_of)
+    layers.sort(key=lambda layer: (_last_shard_of(layer), -len(layer)))
 
 
     # check if splitting exists and all files are there
@@ -385,6 +683,12 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
     for layer in tqdm(layers):
 
+        marker = (layer_names or {}).get('cpu_resident_marker')
+        if marker and marker in layer:
+            persist_ngram_mmap(layer, index, checkpoint_path, saving_path,
+                               repo_id=repo_id, hf_token=hf_token)
+            continue
+
         if layer in passthrough:
             src = checkpoint_path / passthrough[layer]
             if not os.path.exists(src):
@@ -431,9 +735,13 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                                                     token=hf_token)
 
                 if not safetensors_format:
-                    state_dict.update(torch.load(to_load, map_location='cpu'))
+                    loaded = torch.load(to_load, map_location='cpu')
                 else:
-                    state_dict.update(load_file(to_load, device='cpu'))
+                    loaded = load_file(to_load, device='cpu')
+                marker = (layer_names or {}).get('cpu_resident_marker')
+                if marker:
+                    loaded = {k: v for k, v in loaded.items() if marker not in k}
+                state_dict.update(loaded)
 
         else:
             shards = [v for k, v in index.items() if k.startswith(layer)]
@@ -445,12 +753,18 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                 huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
                                                 token=hf_token)
             if not safetensors_format:
-                state_dict.update(torch.load(to_load, map_location='cpu'))
+                loaded = torch.load(to_load, map_location='cpu')
             else:
-                state_dict.update(load_file(to_load, device='cpu'))
+                loaded = load_file(to_load, device='cpu')
+            marker = (layer_names or {}).get('cpu_resident_marker')
+            if marker:
+                loaded = {k: v for k, v in loaded.items() if marker not in k}
+            state_dict.update(loaded)
 
-        # Get layer state dict
-        layer_state_dict = dict([(k, v) for k, v in state_dict.items() if k.startswith(layer)])
+        # Get layer state dict. Longest prefix wins, so e.g. a PLE n-gram table nested under a
+        # decoder layer is not written into that layer's shard (and later streamed onto the GPU).
+        layer_state_dict = dict([(k, v) for k, v in state_dict.items()
+                                 if layer_owner(k, layers) == layer])
 
         layer_state_dict = compress_layer_state_dict(layer_state_dict, compression)
 
