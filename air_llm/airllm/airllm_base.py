@@ -16,7 +16,8 @@ from transformers.quantizers import AutoHfQuantizer
 from .profiler import LayeredProfiler
 
 from .utils import clean_memory, load_layer, layer_tensor_names, load_layer_subset, \
-    find_or_create_local_splitted_path
+    find_or_create_local_splitted_path, load_merged_ngram_embedding, \
+    open_ngram_mmap_table, MmapEmbedding, _force_meta_embeddings
 from .persist import ModelPersister
 
 try:
@@ -198,6 +199,7 @@ class AirLLMBaseModel:
 
         self.set_layers_from_layer_names()
         self._load_resident_modules()
+        self._load_cpu_resident_modules()
         self._install_streaming_hooks()
 
     # ---- customization hooks for subclasses -------------------------------------------------
@@ -289,29 +291,30 @@ class AirLLMBaseModel:
             "trust_remote_code": self.trust_remote_code,
         }
         errors = []
-        for name, cls in self._auto_model_classes():
-            try:
-                with init_empty_weights(include_buffers=False):
-                    model = cls.from_config(self.config, **kwargs)
-            except TypeError:
-                # Older Auto factories don't take attn_implementation.
+        with _force_meta_embeddings():
+            for name, cls in self._auto_model_classes():
                 try:
                     with init_empty_weights(include_buffers=False):
-                        model = cls.from_config(self.config, trust_remote_code=self.trust_remote_code)
+                        model = cls.from_config(self.config, **kwargs)
+                except TypeError:
+                    # Older Auto factories don't take attn_implementation.
+                    try:
+                        with init_empty_weights(include_buffers=False):
+                            model = cls.from_config(self.config, trust_remote_code=self.trust_remote_code)
+                    except Exception as e:  # noqa: BLE001 - try the next factory
+                        errors.append(f"{name}: {type(e).__name__}: {e}")
+                        continue
                 except Exception as e:  # noqa: BLE001 - try the next factory
                     errors.append(f"{name}: {type(e).__name__}: {e}")
                     continue
-            except Exception as e:  # noqa: BLE001 - try the next factory
-                errors.append(f"{name}: {type(e).__name__}: {e}")
-                continue
-            if not self._model_matches_layer_names(model):
-                errors.append(
-                    f"{name}: built {type(model).__name__} but it is missing "
-                    f"{self.layer_names_dict['layer_prefix']}"
-                )
-                continue
-            print(f"built empty {type(model).__name__} via {name} (attn={attn_implementation})")
-            return model
+                if not self._model_matches_layer_names(model):
+                    errors.append(
+                        f"{name}: built {type(model).__name__} but it is missing "
+                        f"{self.layer_names_dict['layer_prefix']}"
+                    )
+                    continue
+                print(f"built empty {type(model).__name__} via {name} (attn={attn_implementation})")
+                return model
         raise RuntimeError(
             "Could not instantiate the model on meta from config. "
             f"architecture={getattr(self.config, 'architectures', None)} "
@@ -586,8 +589,15 @@ class AirLLMBaseModel:
     def move_layer_to_device(self, state_dict):
         self._restore_plain_weight_modules(state_dict)
         state_dict = self._decompress_state_dict(state_dict)
+        marker = self.layer_names_dict.get('cpu_resident_marker')
         moved = []
         for param_name in self._param_names_from_state_dict(state_dict):
+            # A nested CPU table (Flash-Next PLE) must never be placed on the GPU, even if a
+            # decoder-layer shard still contains it.
+            if param_name in getattr(self, '_cpu_resident_params', ()):
+                continue
+            if marker and marker in param_name:
+                continue
             if self.hf_quantizer is not None and self._needs_quantization(param_name):
                 # On-the-fly-quantizing schemes (e.g. bitsandbytes) reconstruct the param from the
                 # weight plus companion quant-state tensors carried in state_dict.
@@ -664,6 +674,66 @@ class AirLLMBaseModel:
                 # Not every checkpoint of a given architecture ships every optional module.
                 continue
             self.move_layer_to_device(state_dict)
+
+    def _cpu_resident_names(self):
+        """Module prefixes whose weights stay on CPU for the lifetime of the process.
+
+        Flash-Next's n-gram table is the motivating case: transformers already gathers rows onto
+        the embedding's own device, so keeping ~102GB of bf16 on the host is the designed path.
+        Names come from ``cpu_resident`` and from split files matching ``cpu_resident_marker``.
+        """
+        names = list(self.layer_names_dict.get('cpu_resident', []))
+        marker = self.layer_names_dict.get('cpu_resident_marker')
+        if marker:
+            for path in Path(self.checkpoint_path).glob('*.mmap.json'):
+                stem = path.name[:-len('.mmap.json')]
+                if stem.endswith(marker) and stem not in names:
+                    names.append(stem)
+            for path in Path(self.checkpoint_path).glob('*.safetensors'):
+                stem = path.name[:-len('.safetensors')]
+                if stem.endswith(marker) and stem not in names:
+                    names.append(stem)
+        return names
+
+    def _install_mmap_embedding(self, module_name, table):
+        parent_name, _, attr = module_name.rpartition('.')
+        parent = self.model.get_submodule(parent_name)
+        setattr(parent, attr, MmapEmbedding(table))
+
+    def _load_cpu_resident_modules(self):
+        """Load oversized lookup tables onto CPU and never stream them to the GPU.
+
+        Flash-Next's n-gram table is ~102GB bf16. We mmap it from disk so a 64GB host can still
+        run; transformers already gathers rows on ``ngram_embedding.weight.device``.
+        ``module.to('meta')`` after a decoder layer would otherwise evict a child embedding that
+        lives under that layer, so we also record the parameter names and evict selectively.
+        """
+        self._cpu_resident_params = set()
+        for name in self._cpu_resident_names():
+            mmap_meta = Path(self.checkpoint_path) / f"{name}.mmap.json"
+            if mmap_meta.exists():
+                table = open_ngram_mmap_table(self.checkpoint_path, name)
+                self._install_mmap_embedding(name, table)
+                self._cpu_resident_params.add(f"{name}.weight")
+                print(f"cpu-resident mmap embedding: {name} "
+                      f"{tuple(table.shape)} {table.dtype} (gathered from disk, not copied to RAM)")
+                continue
+            try:
+                state_dict = load_merged_ngram_embedding(self.checkpoint_path, name)
+            except FileNotFoundError:
+                continue
+            for param_name, value in state_dict.items():
+                self._adopt_checkpoint_shape(param_name, value)
+                if self._should_load_verbatim(param_name, value):
+                    set_module_tensor_to_device(self.model, param_name, 'cpu', value=value)
+                else:
+                    set_module_tensor_to_device(
+                        self.model, param_name, 'cpu', value=value, dtype=self.running_dtype)
+                self._cpu_resident_params.add(param_name)
+        if self._cpu_resident_params:
+            n = len(self._cpu_resident_params)
+            print(f"cpu-resident modules: left {n} tensors on host RAM "
+                  f"(n-gram / PLE table is gathered on CPU, not streamed to the GPU).")
 
     def _install_streaming_hooks(self):
         # Modules execute in this order during a forward: embed -> layers -> norm -> lm_head.
@@ -814,9 +884,13 @@ class AirLLMBaseModel:
                 self._prefetched_idx = nxt
 
     def _post_hook(self, module, args, output):
-        # module.to('meta') would also evict the experts, which manage their own lifetime, so with
-        # expert streaming we only release exactly what this hook placed.
-        if self.hf_quantizer is not None or getattr(self, '_expert_streaming', False):
+        # module.to('meta') would also evict experts (which manage their own lifetime) and any
+        # cpu-resident child such as Flash-Next's n-gram table, which lives under a decoder layer
+        # but must stay materialised on the host. When any of those are in play, only release the
+        # tensors this hook actually placed.
+        if (self.hf_quantizer is not None
+                or getattr(self, '_expert_streaming', False)
+                or getattr(self, '_cpu_resident_params', None)):
             for param_name in getattr(module, '_airllm_moved', []):
                 set_module_tensor_to_device(self.model, param_name, 'meta')
         else:

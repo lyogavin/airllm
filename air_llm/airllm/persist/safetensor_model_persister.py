@@ -19,6 +19,11 @@ class SafetensorModelPersister(ModelPersister):
 
     def model_persist_exist(self, layer_name, saving_path):
 
+        mmap_exists = os.path.exists(str(saving_path / (layer_name + 'mmap')))
+        mmap_done = os.path.exists(str(saving_path / (layer_name + 'mmap.done')))
+        if mmap_exists and mmap_done:
+            return True
+
         safetensor_exists = os.path.exists(str(saving_path / (layer_name + 'safetensors')))
         done_marker_exists = os.path.exists(str(saving_path / (layer_name + 'safetensors.done')))
 
