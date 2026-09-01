@@ -39,6 +39,7 @@ LAYER_TYPES = ["sliding_attention", "full_attention"]
 N_EXPERTS = 2
 TOP_K_EXPERTS = 1
 MOE_INTERMEDIATE_SIZE = 8
+HIDDEN_SIZE_PER_LAYER_INPUT = 4
 VISION_LAYERS = 1
 PATCH_SIZE = 2
 POSITION_EMBEDDING_SIZE = 16
@@ -50,10 +51,15 @@ MODULE_PATHS = (
     "model.language_model.embed_tokens",
     LAYER_PREFIX,
     "model.language_model.norm",
+    "model.language_model.embed_tokens_per_layer",
+    "model.language_model.per_layer_model_projection",
+    "model.language_model.per_layer_projection_norm",
     "lm_head",
     "model.embed_vision",
     "model.vision_tower",
 )
+
+
 def build_tiny_model():
     text_config = Gemma4TextConfig(
         vocab_size=VOCAB_SIZE,
@@ -67,7 +73,7 @@ def build_tiny_model():
         sliding_window=SLIDING_WINDOW,
         layer_types=LAYER_TYPES,
         vocab_size_per_layer_input=VOCAB_SIZE,
-        hidden_size_per_layer_input=0,
+        hidden_size_per_layer_input=HIDDEN_SIZE_PER_LAYER_INPUT,
         num_global_key_value_heads=N_KEY_VALUE_HEADS,
         global_head_dim=HEAD_SIZE,
         enable_moe_block=True,

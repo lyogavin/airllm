@@ -5,7 +5,18 @@ EMBED_MODULE = "model.language_model.embed_tokens"
 LAYER_PREFIX = "model.language_model.layers"
 NORM_MODULE = "model.language_model.norm"
 LM_HEAD_MODULE = "lm_head"
-RESIDENT_MODULES = ["model.embed_vision", "model.vision_tower"]
+PLE_EMBED_MODULE = "model.language_model.embed_tokens_per_layer"
+PLE_PROJECTION_MODULE = "model.language_model.per_layer_model_projection"
+PLE_NORM_MODULE = "model.language_model.per_layer_projection_norm"
+VISION_EMBED_MODULE = "model.embed_vision"
+VISION_TOWER_MODULE = "model.vision_tower"
+RESIDENT_MODULES = [
+    PLE_EMBED_MODULE,
+    PLE_PROJECTION_MODULE,
+    PLE_NORM_MODULE,
+    VISION_EMBED_MODULE,
+    VISION_TOWER_MODULE,
+]
 
 
 class AirLLMGemma4(AirLLMBaseModel):
