@@ -1,7 +1,4 @@
 
-from transformers import GenerationConfig
-
-
 from .airllm_base import AirLLMBaseModel
 
 
