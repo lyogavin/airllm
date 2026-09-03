@@ -83,7 +83,8 @@ class AirLLMBaseModel:
 
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
-                 hf_token=None, prefetching=True, delete_original=False):
+                 hf_token=None, prefetching=True, delete_original=False,
+                 load_resident_modules=True):
         """
         Parameters
         ----------
@@ -109,6 +110,10 @@ class AirLLMBaseModel:
             overlap the next layer's disk load with the current layer's compute
         delete_original: bool, optional
             delete the original downloaded checkpoint after splitting to save disk space
+        load_resident_modules: bool, optional
+            load non-streamed modules such as a multimodal vision tower, by default True. Set this
+            to False for text-only inference when those modules would otherwise waste VRAM. Inputs
+            that need a skipped module will fail until the model is recreated with this enabled.
         """
 
         self.profiling_mode = profiling_mode
@@ -125,6 +130,7 @@ class AirLLMBaseModel:
 
         self.compression = compression
         self.hf_token = hf_token
+        self.load_resident_modules = load_resident_modules
 
         restore_relocated_transformers_symbols()
 
@@ -429,7 +435,7 @@ class AirLLMBaseModel:
         else:
             state_dict = load_layer_output
 
-        if self.prefetching and torch.cuda.is_available():
+        if self.prefetching and self.device.type == 'cuda' and torch.cuda.is_available():
             # pin_memory() returns a pinned copy rather than pinning in place, so the result has to
             # be kept for the faster host->device copy to actually happen. Pinned memory can't be
             # paged out, so we only spend it on layers small enough to be safe: a frontier MoE
@@ -601,8 +607,7 @@ class AirLLMBaseModel:
             if self.hf_quantizer is not None and self._needs_quantization(param_name):
                 # On-the-fly-quantizing schemes (e.g. bitsandbytes) reconstruct the param from the
                 # weight plus companion quant-state tensors carried in state_dict.
-                self.hf_quantizer.create_quantized_param(self.model, state_dict[param_name], param_name,
-                                                         self.running_device, state_dict)
+                self._create_quantized_param(param_name, state_dict)
             else:
                 # Normal load. Only ordinary high-precision tensors get cast to the runtime dtype;
                 # pre-quantized payloads must be placed verbatim (see _should_load_verbatim).
@@ -615,6 +620,63 @@ class AirLLMBaseModel:
                                                 value=value, dtype=self.running_dtype)
             moved.append(param_name)
         return moved
+
+    def _create_quantized_param(self, param_name, state_dict):
+        """Materialise one pre-quantized parameter across Transformers API generations.
+
+        Transformers 4 exposed ``create_quantized_param`` directly on each quantizer. Transformers
+        5 replaced it with weight-conversion operations. AirLLM loads one layer outside the normal
+        ``from_pretrained`` pipeline, so it must invoke the equivalent conversion itself.
+        """
+        if hasattr(self.hf_quantizer, 'create_quantized_param'):
+            self.hf_quantizer.create_quantized_param(
+                self.model,
+                state_dict[param_name],
+                param_name,
+                self.running_device,
+                state_dict,
+            )
+            return
+
+        get_conversions = getattr(self.hf_quantizer, 'get_weight_conversions', None)
+        if get_conversions is None:
+            raise RuntimeError(
+                f"{type(self.hf_quantizer).__name__} cannot materialise streamed quantized weights: "
+                "neither create_quantized_param nor get_weight_conversions is available."
+            )
+
+        converters = get_conversions()
+        converter = next((item for item in converters
+                          if 'weight' in getattr(item, 'target_patterns', ())), None)
+        if converter is None or not getattr(converter, 'operations', None):
+            raise RuntimeError(
+                f"No weight deserializer was provided by {type(self.hf_quantizer).__name__}."
+            )
+
+        module_path, _, tensor_name = param_name.rpartition('.')
+        local_state = {}
+        for key, value in state_dict.items():
+            if key == param_name or key.startswith(param_name + '.'):
+                relative_name = key[len(module_path) + 1:]
+                local_state[relative_name] = value.to(self.running_device)
+
+        converted = local_state
+        for operation in converter.operations:
+            converted = operation.convert(
+                converted,
+                full_layer_name=param_name,
+                model=self.model,
+                config=self.config,
+            )
+
+        value = converted.get(tensor_name)
+        if value is None:
+            raise RuntimeError(
+                f"Quantized deserializer for {param_name} returned {tuple(converted)}, "
+                f"expected {tensor_name!r}."
+            )
+        module = self.model.get_submodule(module_path) if module_path else self.model
+        module._parameters[tensor_name] = value
 
     # Suffixes of the companion tensors that pre-quantized checkpoints ship alongside a weight
     # (fp8 block scales, compressed-tensors/MXFP4 packed payloads and their scales, GPTQ indices).
@@ -649,10 +711,24 @@ class AirLLMBaseModel:
         for param_name in state_dict.keys():
             # bitsandbytes stores a weight plus companion quant-state tensors named
             # "<weight>.4bit.*" / "<weight>.8bit.*"; those are reconstructed together via
-            # create_quantized_param, so collapse them down to the base weight name. Everything
-            # else (including fp8 weight + weight_scale_inv pairs) is kept as distinct params.
+            # create_quantized_param, so collapse them down to the base weight name. Hugging Face
+            # pre-quantized checkpoints use a second spelling: ``<weight>.absmax``,
+            # ``<weight>.quant_map`` and ``<weight>.quant_state.bitsandbytes__nf4`` (plus nested
+            # variants). Those are metadata for the same weight, not model parameters; passing one
+            # to AutoHfQuantizer makes Transformers try to resolve ``weight`` as a submodule.
+            # Everything else (including fp8 weight + weight_scale_inv pairs) stays distinct.
             if '.4bit.' in param_name or '.8bit.' in param_name:
                 base = param_name.split('.4bit.')[0].split('.8bit.')[0]
+                if base not in names:
+                    names.append(base)
+            elif any(marker in param_name for marker in (
+                    '.weight.absmax',
+                    '.weight.nested_absmax',
+                    '.weight.nested_quant_map',
+                    '.weight.quant_map',
+                    '.weight.quant_state.bitsandbytes__',
+            )):
+                base = param_name[:param_name.index('.weight.') + len('.weight')]
                 if base not in names:
                     names.append(base)
             elif param_name not in names:
@@ -667,6 +743,12 @@ class AirLLMBaseModel:
         the meta device and fail the moment they run. They are small (well under a GB), so we load
         them once and leave them resident.
         """
+        if not self.load_resident_modules:
+            resident = self.layer_names_dict.get('resident', [])
+            if resident:
+                print(f"text-only mode: leaving resident modules on meta: {', '.join(resident)}")
+            return
+
         for name in self.layer_names_dict.get('resident', []):
             try:
                 state_dict = self.load_layer_to_cpu(name)
