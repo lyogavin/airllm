@@ -44,3 +44,16 @@ else:
                 f"This only affects that specific model family; the generic streaming path still works."
             )
 
+    from .chat import InteractiveChatSession
+    from .models import (
+        resolve_model_name,
+        list_local_models,
+        remove_model_cache,
+        get_model_info,
+        MODEL_ALIASES,
+    )
+
+    def cli_main():
+        from .cli import main
+        return main()
+
