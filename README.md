@@ -85,17 +85,48 @@
 
 ### 1. Install package
 
-First, install the airllm pip package.
-
 ```bash
 pip install airllm
 ```
 
-### 2. Inference
+### 2. Interactive Chat & CLI 
 
-Then, initialize AirLLMLlama2, pass in the huggingface repo ID of the model being used, or the local path, and inference can be performed similar to a regular transformer model.
+Chat directly with 70B+ models in your terminal with live streaming responses:
 
-(*You can also specify the path to save the splitted layered model through **layer_shards_saving_path** when init AirLLMLlama2.*
+```bash
+# Chat immediately (downloads and shards automatically)
+airllm run llama3:70b
+
+# Chat with DeepSeek, Qwen 2.5, Mistral, etc.
+airllm run deepseek-r1:70b
+airllm run qwen2.5:72b
+
+# View all friendly model aliases
+airllm aliases
+
+# List downloaded models and their disk size
+airllm list
+
+# Pre-download and shard a model ahead of time
+airllm pull llama3:70b
+
+# Inspect model architecture and context length
+airllm show llama3:70b
+
+# Free up disk space
+airllm rm llama3:70b
+```
+
+**Inside the interactive terminal chat:**
+* Real-time token streaming as words are generated.
+* Multi-turn conversational memory.
+* Quick slash commands: `/help`, `/clear` (reset context), `/system <prompt>` (update system instructions), `/history` (review conversation), `/stats` (toggle speed tokens/s), `/bye` (exit).
+
+---
+
+### 3. Python API (Optional)
+
+If you prefer writing custom Python scripts, you can continue using `AutoModel`:
 
 ```python
 from airllm import AutoModel
