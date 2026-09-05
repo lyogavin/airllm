@@ -15,12 +15,12 @@ for _readme in (os.path.join(here, "README.md"), os.path.join(here, os.pardir, "
 
 setuptools.setup(
     name="airllm",
-    version="3.3.0",
+    version="4.0.0",
     author="Gavin Li",
     author_email="gavinli@animaai.cloud",
     description="AirLLM runs 70B large language models on a single 4GB GPU without quantization, "
-                "distillation or pruning. 405B Llama 3.1 on 8GB, DeepSeek-V3 671B on ~12GB, "
-                "Kimi K3 2.8T on under 4GB, Qwen3.8-27B on 3.3GB, Qwen3.8-Flash-Next on 6GB.",
+                "distillation or pruning. Kimi K3 2.8T on under 4GB, Qwen3.8-Flash-Next 125B on 6GB, "
+                "DeepSeek-V3 671B on ~12GB. Train Qwen3.8-Flash-Next under 6GB.",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/lyogavin/airllm",
@@ -30,7 +30,7 @@ setuptools.setup(
     install_requires=[
         'tqdm',
         'torch>=2.4',
-        'transformers>=4.49,<5.13',
+        'transformers>=4.49,<6',
         'accelerate>=1.0',
         'safetensors',
         'huggingface-hub',
