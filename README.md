@@ -304,6 +304,50 @@ AirLLM can fine-tune huge models on a small GPU. Frozen base weights stream from
 
 This is not Hugging Face Trainer / bitsandbytes QLoRA. Flash-Next needs a `transformers` build with in-tree `qwen4_exp` (`pip install git+https://github.com/huggingface/transformers.git` today).
 
+### 1. Prepare a dataset
+
+One JSON object per line (`.jsonl`). The usual field is `text` — next-token prediction over the whole string:
+
+```json
+{"text": "Your first training document. Can be a few sentences or a few paragraphs."}
+{"text": "Your second training document."}
+```
+
+Instruction pairs work too. Loss is applied on the completion only:
+
+```json
+{"prompt": "What is AirLLM?", "completion": "A library that runs and trains huge models on small VRAM."}
+{"instruction": "Translate to English", "input": "bonjour", "output": "hello"}
+```
+
+A `.txt` file is also fine: one example per blank-line-separated block. A two-line starter file lives at `air_llm/examples/sft_example.jsonl`.
+
+### 2. Run training
+
+From the repo root, point `--data` at your file:
+
+```bash
+python air_llm/examples/train_qwen38_flash_next_lora.py \
+  --data my_data.jsonl \
+  --seq-len 512 \
+  --epochs 1 \
+  --save-adapter qwen38-flash-next-lora.pt
+```
+
+For the 27B dense model:
+
+```bash
+python air_llm/examples/train_qwen38_lora.py \
+  --data my_data.jsonl \
+  --seq-len 512 \
+  --epochs 1 \
+  --save-adapter qwen38-27b-lora.pt
+```
+
+`--steps N` stops after N examples (useful for a smoke test). Omit `--data` and the script overfits a built-in snippet.
+
+### Python API
+
 ```python
 from airllm import AirLLMLoRAQwen4Exp
 
@@ -332,20 +376,7 @@ print(loss)
 trainer.save_adapter("qwen38-flash-next-lora.pt")
 ```
 
-For the 27B dense model, use `AirLLMLoRA` instead:
-
-```python
-from airllm import AirLLMLoRA
-
-trainer = AirLLMLoRA("Qwen/Qwen3.8-27B", max_seq_len=512, lora_r=16)
-```
-
-Or run the example scripts from the repo root:
-
-```bash
-python air_llm/examples/train_qwen38_flash_next_lora.py --seq-len 512 --steps 1 --verbose
-python air_llm/examples/train_qwen38_lora.py --seq-len 512 --steps 1 --verbose
-```
+`AirLLMLoRA` is the same API for `Qwen/Qwen3.8-27B`.
 
 ## Acknowledgement
 

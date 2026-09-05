@@ -1,0 +1,2 @@
+{"text": "AirLLM streams frozen decoder weights from disk one layer at a time so LoRA can train on a small GPU."}
+{"prompt": "What is AirLLM?", "completion": "A library that runs and trains huge language models on small VRAM by streaming one layer at a time."}
