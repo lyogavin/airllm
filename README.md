@@ -340,7 +340,12 @@ from airllm import AirLLMLoRA
 trainer = AirLLMLoRA("Qwen/Qwen3.8-27B", max_seq_len=512, lora_r=16)
 ```
 
-CLI examples: `air_llm/examples/train_qwen38_flash_next_lora.py` and `air_llm/examples/train_qwen38_lora.py`.
+Or run the example scripts from the repo root:
+
+```bash
+python air_llm/examples/train_qwen38_flash_next_lora.py --seq-len 512 --steps 1 --verbose
+python air_llm/examples/train_qwen38_lora.py --seq-len 512 --steps 1 --verbose
+```
 
 ## Acknowledgement
 
