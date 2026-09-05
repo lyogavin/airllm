@@ -83,7 +83,8 @@ class AirLLMBaseModel:
 
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
-                 hf_token=None, prefetching=True, delete_original=False):
+                 hf_token=None, prefetching=True, delete_original=False,
+                 install_hooks=True, load_resident=True):
         """
         Parameters
         ----------
@@ -109,6 +110,13 @@ class AirLLMBaseModel:
             overlap the next layer's disk load with the current layer's compute
         delete_original: bool, optional
             delete the original downloaded checkpoint after splitting to save disk space
+        install_hooks: bool, optional
+            attach inference streaming hooks. Training drives load/evict itself, so LoRA
+            training passes False — the hooks call ``module.to('meta')`` after forward and
+            that breaks backward.
+        load_resident: bool, optional
+            load ``resident`` modules (e.g. a vision tower) onto the GPU. Text-only LoRA
+            training leaves them on meta.
         """
 
         self.profiling_mode = profiling_mode
@@ -198,9 +206,11 @@ class AirLLMBaseModel:
         self.max_seq_len = max_seq_len
 
         self.set_layers_from_layer_names()
-        self._load_resident_modules()
+        if load_resident:
+            self._load_resident_modules()
         self._load_cpu_resident_modules()
-        self._install_streaming_hooks()
+        if install_hooks:
+            self._install_streaming_hooks()
 
     # ---- customization hooks for subclasses -------------------------------------------------
 
