@@ -1,7 +1,7 @@
 import sys
 import time
 import threading
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Any
 from transformers import TextIteratorStreamer
 
 # ANSI Terminal Color Helpers
@@ -156,27 +156,33 @@ class InteractiveChatSession:
         )
 
         # Launch generation in background thread
-        thread = threading.Thread(target=self.model.generate, kwargs=generation_kwargs)
+        thread = threading.Thread(target=self.model.generate, kwargs=generation_kwargs, daemon=True)
         start_time = time.time()
         thread.start()
 
         full_response = []
-        token_count = 0
 
-        # Stream tokens live
-        for new_text in streamer:
-            sys.stdout.write(new_text)
-            sys.stdout.flush()
-            full_response.append(new_text)
-            token_count += 1
+        # Stream text chunks live; wrapped in try/finally so the background
+        # thread is always joined even if streaming raises or the user hits Ctrl+C.
+        try:
+            for new_text in streamer:
+                sys.stdout.write(new_text)
+                sys.stdout.flush()
+                full_response.append(new_text)
+        finally:
+            thread.join(timeout=5.0)
+            if thread.is_alive():
+                print(f"\n{Colors.YELLOW}[warning] generation thread did not exit within 5 s{Colors.RESET}")
 
-        thread.join()
         elapsed = time.time() - start_time
         print()  # Newline after stream ends
 
         response_str = "".join(full_response).strip()
 
-        if self.show_stats and elapsed > 0 and token_count > 0:
+        if self.show_stats and elapsed > 0 and response_str:
+            # TextIteratorStreamer yields decoded text chunks, not individual
+            # tokens.  Re-encode the full response to get the real token count.
+            token_count = len(tokenizer.encode(response_str, add_special_tokens=False))
             speed = token_count / elapsed
             print(f"{Colors.DIM}({token_count} tokens, {elapsed:.2f}s, {speed:.2f} tokens/s){Colors.RESET}")
 

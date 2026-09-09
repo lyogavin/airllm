@@ -1,7 +1,5 @@
 import argparse
 import sys
-import os
-from typing import Optional
 
 from .models import (
     resolve_model_name,

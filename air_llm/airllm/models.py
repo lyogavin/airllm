@@ -150,8 +150,27 @@ def list_local_models() -> List[Dict[str, Any]]:
     return models
 
 
+def _is_safe_cache_path(target: Path) -> bool:
+    """Return True only if *target* lives inside the HuggingFace hub cache directory.
+
+    Resolves symlinks so that ``../../etc`` tricks cannot escape the cache root.
+    """
+    try:
+        hub_dir = get_hf_hub_cache_dir().resolve()
+        resolved = target.resolve()
+        # Must be a proper child, not the cache root itself.
+        return resolved != hub_dir and hub_dir in resolved.parents
+    except (OSError, ValueError):
+        return False
+
+
 def remove_model_cache(name_or_alias: str) -> bool:
-    """Delete the model cache (and its shards) from the local system."""
+    """Delete the model cache (and its shards) from the local system.
+
+    Only directories that live inside the HuggingFace hub cache
+    (``HF_HUB_CACHE``) are eligible for deletion.  Arbitrary filesystem
+    paths are rejected with a ``ValueError`` to prevent accidental data loss.
+    """
     repo_id = resolve_model_name(name_or_alias)
     hub_dir = get_hf_hub_cache_dir()
 
@@ -160,14 +179,15 @@ def remove_model_cache(name_or_alias: str) -> bool:
     folder_name = f"models--{parts}"
     target = hub_dir / folder_name
 
+    if not _is_safe_cache_path(target):
+        raise ValueError(
+            f"Refusing to delete '{target}': path is not inside the "
+            f"HuggingFace hub cache ({hub_dir}). Only cached model "
+            f"directories can be removed with this command."
+        )
+
     if target.exists() and target.is_dir():
         shutil.rmtree(target, ignore_errors=True)
-        return True
-
-    # If user provided direct path
-    p = Path(name_or_alias)
-    if p.exists() and p.is_dir():
-        shutil.rmtree(p, ignore_errors=True)
         return True
 
     return False
