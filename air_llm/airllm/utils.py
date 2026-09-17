@@ -489,12 +489,11 @@ def compress_layer_state_dict(layer_state_dict, compression=None):
     return compressed_layer_state_dict if compressed_layer_state_dict is not None else layer_state_dict
 
 def remove_real_and_linked_file(to_delete):
-    if (os.path.realpath(to_delete) != to_delete):
-        targetpath = os.path.realpath(to_delete)
+    targetpath = os.path.realpath(to_delete) if os.path.islink(to_delete) else None
 
     os.remove(to_delete)
-    if (targetpath):
-         os.remove(targetpath)
+    if targetpath:
+        os.remove(targetpath)
 
 
 
