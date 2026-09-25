@@ -61,6 +61,12 @@ def get_model_args_from_config(config):
     params["vocab_size"] = config.vocab_size
     params["norm_eps"] = config.rms_norm_eps
     params["rope_traditional"] = False
+    # Carry rope_theta through from the model config. Without this, sanitize_config() falls back to
+    # the Llama-2-era default of 10000, but Llama 3.x (and most modern models) use 500000. A wrong
+    # rope base still looks plausible on short prompts and then degrades into incoherence as the
+    # prompt grows past ~1k tokens, well inside the advertised context.
+    if getattr(config, "rope_theta", None) is not None:
+        params["rope_theta"] = config.rope_theta
 
     sconfig = sanitize_config(params)
 
