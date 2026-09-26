@@ -13,7 +13,7 @@ import mlx.nn as nn
 from sentencepiece import SentencePieceProcessor
 from .persist import ModelPersister
 import psutil
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, AutoModel, GenerationMixin, LlamaForCausalLM, GenerationConfig
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, AutoModel, GenerationMixin, GenerationConfig
 from .utils import clean_memory, load_layer, \
     find_or_create_local_splitted_path
 
