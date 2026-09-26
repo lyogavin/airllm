@@ -45,4 +45,9 @@ setuptools.setup(
         "License :: OSI Approved :: Apache Software License",
         "Operating System :: OS Independent",
     ],
+    entry_points={
+        "console_scripts": [
+            "airllm=airllm.cli:main",
+        ],
+    },
 )
