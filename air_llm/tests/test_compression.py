@@ -1,14 +1,17 @@
-import sys
 import unittest
 
 import torch
-sys.path.insert(0, '../airllm')
 
-from airllm import compress_layer_state_dict, uncompress_layer_state_dict
+# These live in airllm.utils and are not re-exported from the package root, so importing them
+# from `airllm` directly raised ImportError and the whole module failed to collect.
+from airllm.utils import compress_layer_state_dict, uncompress_layer_state_dict
 
 
 
 
+# Compression goes through bitsandbytes, which needs a CUDA device: the state dicts are quantized
+# with .cuda() tensors. Skip (rather than error) on CPU-only machines and CI runners.
+@unittest.skipUnless(torch.cuda.is_available(), "compression requires a CUDA GPU")
 class TestCompression(unittest.TestCase):
     def setUp(self):
         pass
