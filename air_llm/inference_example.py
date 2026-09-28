@@ -1,8 +1,18 @@
+import torch
 from airllm import AirLLMLlama2
 
 MAX_LENGTH = 128
+
+# select the right device
+if torch.cuda.is_available():
+    device = "cuda:0"
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    device = "mps"
+else:
+    device = "cpu"
+
 # could use hugging face model repo id:
-model = AirLLMLlama2("garage-bAInd/Platypus2-70B-instruct")
+model = AirLLMLlama2("garage-bAInd/Platypus2-70B-instruct", device = device)
 
 # or use model's local path...
 #model = AirLLMLlama2("/home/ubuntu/.cache/huggingface/hub/models--garage-bAInd--Platypus2-70B-instruct/snapshots/b585e74bcaae02e52665d9ac6d23f4d0dbc81a0f")
@@ -20,7 +30,7 @@ input_tokens = model.tokenizer(input_text,
     padding=True)
            
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device),
     max_new_tokens=2,
     use_cache=True,
     return_dict_in_generate=True)
