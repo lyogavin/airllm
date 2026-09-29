@@ -809,7 +809,10 @@ def find_or_create_local_splitted_path(model_local_path_or_repo_id, layer_shards
     saved_layer_shards_path : str
         the path saved layer shards
     compression: str, optinal
-        setting to '4bit' or '8bit' to enable compression from 16 bits to 4 bits/8 bits which speeed up 4x or 2x inference time with a tiny accuracy loss.
+        setting to '4bit' or '8bit' to store weights in a smaller representation.
+        Compression can reduce checkpoint storage, but it does not guarantee faster
+        inference because layers are dequantized while they are loaded. Benchmark
+        the target model and hardware before relying on a performance improvement.
     hf_token: str, optional
         huggingface api token could be provided, by default None
     """
