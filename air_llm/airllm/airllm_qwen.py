@@ -1,6 +1,4 @@
 
-from transformers import GenerationConfig
-
 from .airllm_base import AirLLMBaseModel
 
 
@@ -15,9 +13,6 @@ class AirLLMQWen(AirLLMBaseModel):
 
     def get_use_better_transformer(self):
         return False
-    def get_generation_config(self):
-        return GenerationConfig()
-
 
     def get_past_key_values_cache_seq_len(self, past_key_values):
         return past_key_values[0][0].shape[1]
