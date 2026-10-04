@@ -28,12 +28,7 @@ from safetensors.torch import load_file, save_file
 from .persist import ModelPersister
 
 
-try:
-    import bitsandbytes as bnb
-
-    bitsandbytes_installed = True
-except ImportError:
-    bitsandbytes_installed = False
+from .compression import require_bitsandbytes
 
 
 import huggingface_hub
@@ -64,6 +59,7 @@ def save_quant_state_to_dict(self, packed=True):
     if not packed:
         return qs_dict
 
+    bnb = require_bitsandbytes()
     qs_packed_dict = {k: v for k, v in qs_dict.items() if isinstance(v, torch.Tensor)}
     non_tensor_dict = {k: v for k, v in qs_dict.items() if not isinstance(v, torch.Tensor)}
     qs_packed_dict["quant_state." + "bitsandbytes__" + self.quant_type] = bnb.utils.pack_dict_to_tensor(non_tensor_dict)
@@ -88,6 +84,7 @@ def clean_memory():
 def uncompress_layer_state_dict(layer_state_dict):
     uncompressed_layer_state_dict = None
     if any(['4bit' in k for k in layer_state_dict.keys()]):
+        bnb = require_bitsandbytes()
         uncompressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
             if '4bit' not in k:
@@ -98,18 +95,22 @@ def uncompress_layer_state_dict(layer_state_dict):
                 uncompressed_layer_state_dict[k] = dqv
         del layer_state_dict
     elif any(['8bit' in k for k in layer_state_dict.keys()]):
+        bnb = require_bitsandbytes()
         uncompressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
             if '8bit' not in k:
 
                 absmax = layer_state_dict[k + ".8bit.absmax"]
                 code = layer_state_dict[k + ".8bit.code"]
+                # Legacy shards imply FP16; new shards retain the source dtype.
+                dtype_marker = layer_state_dict.get(k + ".8bit.dtype")
+                dtype = dtype_marker.dtype if dtype_marker is not None else torch.float16
 
                 dqv = bnb.functional.dequantize_blockwise(v.cuda(),
                                                           bnb.functional.QuantState(absmax=absmax.cuda(),
                                                                                     code=code.cuda(),
                                                                                     blocksize=2048,
-                                                                                    dtype=torch.float16))
+                                                                                    dtype=dtype))
                 uncompressed_layer_state_dict[k] = dqv
         del layer_state_dict
 
@@ -468,6 +469,8 @@ def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None
                                       )
 
 def compress_layer_state_dict(layer_state_dict, compression=None):
+    if compression is not None:
+        bnb = require_bitsandbytes()
     compressed_layer_state_dict = None
     if compression == '4bit':
         compressed_layer_state_dict = {}
@@ -485,6 +488,7 @@ def compress_layer_state_dict(layer_state_dict, compression=None):
             compressed_layer_state_dict[k] = v_quant
             compressed_layer_state_dict[k + ".8bit.absmax"] = absmax
             compressed_layer_state_dict[k + ".8bit.code"] = code
+            compressed_layer_state_dict[k + ".8bit.dtype"] = torch.empty(0, dtype=quant_state.dtype)
 
     return compressed_layer_state_dict if compressed_layer_state_dict is not None else layer_state_dict
 
@@ -532,7 +536,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     """
 
     if compression is not None:
-        assert bitsandbytes_installed, f"when using compression bitsandbytes has to be installed."
+        require_bitsandbytes()
         splitted_model_dir_name = splitted_model_dir_name + "." + compression
 
     checkpoint_path = Path(checkpoint_path)
