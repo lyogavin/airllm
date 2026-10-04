@@ -77,6 +77,7 @@
 * [Quick start](#quickstart)
 * [Model Compression](#model-compression---3x-inference-speed-up)
 * [Configurations](#configurations)
+* [AMD GPUs with ROCm](docs/rocm.md)
 * [Run on MacOS](#macos)
 * [Example notebooks](#example-python-notebook)
 * [Supported Models](#supported-models)
@@ -93,6 +94,8 @@ First, install the airllm pip package.
 ```bash
 pip install airllm
 ```
+
+For AMD GPUs, install ROCm-enabled PyTorch first and follow the [ROCm guide](docs/rocm.md). AMD uses the same `device="cuda:0"` interface; start with `compression=None`.
 
 ### 2. Inference
 
