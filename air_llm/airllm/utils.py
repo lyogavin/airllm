@@ -1,4 +1,5 @@
 import gc
+import importlib
 import json
 import os
 import re
@@ -28,10 +29,20 @@ from safetensors.torch import load_file, save_file
 from .persist import ModelPersister
 
 
-from .compression import require_bitsandbytes
-
-
 import huggingface_hub
+
+
+def require_bitsandbytes():
+    """Load the optional backend when compression needs it, preserving import errors."""
+    try:
+        return importlib.import_module('bitsandbytes')
+    except (ImportError, OSError, RuntimeError) as exc:
+        raise ImportError(
+            'AirLLM compression requires a working bitsandbytes installation compatible '
+            'with your PyTorch build and GPU backend (CUDA or ROCm). '
+            'For uncompressed checkpoints, use compression=None without bitsandbytes. '
+            'Already-compressed layer shards still require bitsandbytes.'
+        ) from exc
 
 
 # replacement for bnb quantstat.as_dict(True), until the bug is fixed....

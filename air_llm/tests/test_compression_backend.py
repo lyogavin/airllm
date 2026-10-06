@@ -6,9 +6,8 @@ GPU skips this module; a broken or missing backend on a GPU is a test failure.
 import pytest
 import torch
 
-from airllm.compression import require_bitsandbytes
 from airllm.persist.safetensor_model_persister import SafetensorModelPersister
-from airllm.utils import compress_layer_state_dict, uncompress_layer_state_dict
+from airllm.utils import compress_layer_state_dict, uncompress_layer_state_dict, require_bitsandbytes
 
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
