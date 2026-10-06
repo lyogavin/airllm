@@ -112,8 +112,14 @@ compression cases check real NF4/8-bit kernels, persisted shard reconstruction,
 numerical error, BF16 values outside FP16 range, and legacy 8-bit compatibility.
 These tests require no pretrained model downloads.
 
+The same 15 cases also passed on an NVIDIA GeForce RTX 4070 Laptop GPU
+(8 GB), Ubuntu 24.04, with driver 580.126.09, PyTorch 2.14.1+cu132,
+CUDA 13.2, Transformers 4.57.6, Accelerate 1.15.0, and bitsandbytes 0.50.2
+using native `libbitsandbytes_cuda132.so`. There were no skips, and `pip check`
+passed. Both FP16 and BF16 generated tokens matched the resident reference.
+
 GPU tests skip when no GPU is available; a skipped run is not GPU validation.
 This change does not establish support for all architectures, pretrained
-quantization formats, large-model memory bounds, throughput, or NVIDIA
-regression coverage. PyTorch describes the API convention in
+quantization formats, large-model memory bounds, or throughput.
+PyTorch describes the API convention in
 [HIP semantics](https://github.com/pytorch/pytorch/blob/main/docs/source/notes/hip.rst).
