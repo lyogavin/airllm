@@ -6,10 +6,12 @@ inference does not require bitsandbytes.
 
 ## Installation
 
-Install the AMD driver and ROCm-enabled PyTorch build for your GPU and OS using
-the [AMD PyTorch guide](https://rocm.docs.amd.com/projects/ai-ecosystem/en/latest/frameworks/pytorch/install.html).
-[TheRock releases](https://github.com/ROCm/TheRock/blob/main/RELEASES.md) provide
-another source of ROCm/PyTorch builds. Verify GPU access in that environment:
+Install the AMD driver and ROCm release for your GPU and OS using the
+[official AMD ROCm installation page](https://rocm.docs.amd.com/en/latest/install/rocm.html),
+then install ROCm-enabled PyTorch using the
+[AMD PyTorch guide](https://rocm.docs.amd.com/projects/ai-ecosystem/en/latest/frameworks/pytorch/install.html).
+Alternatively, follow [TheRock's release instructions](https://github.com/ROCm/TheRock/blob/main/RELEASES.md)
+for ROCm/PyTorch builds. Verify GPU access in that environment:
 
 ```python
 import torch
