@@ -51,7 +51,7 @@ def test_uncompressed_path_does_not_import_bitsandbytes(error):
 
 def test_compression_backend_remains_available_when_installed(monkeypatch):
     from types import SimpleNamespace
-    from airllm.compression import require_bitsandbytes
+    from airllm.utils import require_bitsandbytes
     backend = SimpleNamespace()
     monkeypatch.setitem(sys.modules, 'bitsandbytes', backend)
     assert require_bitsandbytes() is backend

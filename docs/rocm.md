@@ -118,6 +118,22 @@ CUDA 13.2, Transformers 4.57.6, Accelerate 1.15.0, and bitsandbytes 0.50.2
 using native `libbitsandbytes_cuda132.so`. There were no skips, and `pip check`
 passed. Both FP16 and BF16 generated tokens matched the resident reference.
 
+### Qwen3.8-27B text inference
+
+An additional text inference check used `Qwen/Qwen3.8-27B` in BF16 on the
+same Strix Halo / ROCm 10.0 system, with Transformers 5.18.0, SDPA,
+`MIOPEN_FIND_MODE=FAST`, `compression=None`, and prefetch enabled.
+Greedy generation answered `Paris` to the capital-of-France prompt and
+matched on repetition. Tokens and checked prefill/cached-step logits matched
+the previously recorded native Transformers + Accelerate offload reference
+on the same GPU.
+
+Peak PyTorch GPU allocation was **3.50 GiB**, with **3.55 GiB reserved**,
+under a 4 GiB PyTorch allocator limit. The uncompressed layer shards totaled
+54.71 GB. These figures cover the short text inference check and measure
+PyTorch's GPU allocator; they exclude host memory, file cache, and native
+allocations outside that allocator. Vision-input inference was not tested.
+
 GPU tests skip when no GPU is available; a skipped run is not GPU validation.
 This change does not establish support for all architectures, pretrained
 quantization formats, large-model memory bounds, or throughput.

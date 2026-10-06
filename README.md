@@ -187,7 +187,7 @@ When initialize the model, we support the following configurations:
 
 Install an AMD driver and ROCm-enabled PyTorch build compatible with your GPU and OS before installing AirLLM. AMD GPUs use the same `device="cuda:0"` interface as NVIDIA GPUs. Uncompressed inference uses `compression=None`; 4-bit/8-bit compression requires a compatible bitsandbytes backend.
 
-Validated on Strix Halo Radeon 8060S (`gfx1151`) with ROCm 10.0 on Ubuntu 24.04 / WSL2. See the [ROCm guide](https://github.com/lyogavin/airllm/blob/main/docs/rocm.md) for installation, compression requirements, and validation details.
+Validated on Strix Halo Radeon 8060S (`gfx1151`) with ROCm 10.0 on Ubuntu 24.04 / WSL2. **Qwen3.8-27B BF16** generated `Paris` in a text inference check with **3.50 GiB peak PyTorch GPU allocation** (Transformers 5.18.0). See the [ROCm guide](https://github.com/lyogavin/airllm/blob/main/docs/rocm.md) for installation, compression requirements, and validation details.
 
 ## MacOS
 

@@ -17,11 +17,8 @@ from .profiler import LayeredProfiler
 
 from .utils import clean_memory, load_layer, layer_tensor_names, load_layer_subset, \
     find_or_create_local_splitted_path, load_merged_ngram_embedding, \
-    open_ngram_mmap_table, MmapEmbedding, _force_meta_embeddings
+    open_ngram_mmap_table, MmapEmbedding, _force_meta_embeddings, require_bitsandbytes
 from .persist import ModelPersister
-
-from .compression import require_bitsandbytes
-
 
 # Helpers that transformers 5.0 moved out of transformers.utils.generic. Remote model code is
 # routinely written against an older transformers and still imports them from the old location,
