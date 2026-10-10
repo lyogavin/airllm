@@ -85,6 +85,22 @@ def clean_memory():
     torch.cuda.empty_cache()
 
 
+def default_device():
+    """Pick the best device available, instead of assuming CUDA.
+
+    AirLLM's public API defaulted to ``cuda:0``, so a plain
+    ``AutoModel.from_pretrained(repo_id)`` raised on any machine without an NVIDIA GPU -- Apple
+    silicon, a CPU-only box, or a container without the runtime -- even though the layer-streaming
+    path itself is device-agnostic. Prefer CUDA (where the VRAM savings matter), then Apple's MPS
+    backend, then CPU.
+    """
+    if torch.cuda.is_available():
+        return "cuda:0"
+    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def uncompress_layer_state_dict(layer_state_dict):
     uncompressed_layer_state_dict = None
     if any(['4bit' in k for k in layer_state_dict.keys()]):

@@ -17,7 +17,7 @@ from .profiler import LayeredProfiler
 
 from .utils import clean_memory, load_layer, layer_tensor_names, load_layer_subset, \
     find_or_create_local_splitted_path, load_merged_ngram_embedding, \
-    open_ngram_mmap_table, MmapEmbedding, _force_meta_embeddings
+    open_ngram_mmap_table, MmapEmbedding, _force_meta_embeddings, default_device
 from .persist import ModelPersister
 
 try:
@@ -81,7 +81,7 @@ class AirLLMBaseModel:
                                  'norm': 'model.norm',
                                  'lm_head': 'lm_head'}
 
-    def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
+    def __init__(self, model_local_path_or_repo_id, device=None, dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
                  hf_token=None, prefetching=True, delete_original=False,
                  install_hooks=True, load_resident=True):
@@ -91,7 +91,8 @@ class AirLLMBaseModel:
         model_local_path_or_repo_id : str or Path
             path to the local model checkpoint or huggingface repo id
         device : str, optional
-            device, by default "cuda:0"
+            runtime device. By default the best available is picked: CUDA, else Apple MPS,
+            else CPU. Pass an explicit value (e.g. "cuda:1", "cpu") to override.
         dtype : torch.dtype, optional
             runtime dtype; defaults to the model's own config.torch_dtype (usually bfloat16 for
             modern models). float16 has too narrow a range for very deep models and overflows to
@@ -146,7 +147,7 @@ class AirLLMBaseModel:
             hf_token=hf_token,
             delete_original=delete_original)
 
-        self.running_device = device
+        self.running_device = device if device is not None else default_device()
         self.device = torch.device(self.running_device)
 
         # Prefer transformers' native implementation; only trust the model's bundled remote code when
