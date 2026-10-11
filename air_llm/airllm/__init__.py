@@ -5,6 +5,8 @@ is_on_mac_os = False
 if platform == "darwin":
     is_on_mac_os = True
 
+from .estimate import estimate_resources, format_resource_estimate
+
 if is_on_mac_os:
     from .airllm_llama_mlx import AirLLMLlamaMlx
     from .auto_model import AutoModel

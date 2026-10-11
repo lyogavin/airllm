@@ -53,6 +53,18 @@ class AutoModel:
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *inputs, **kwargs):
+        dry_run = kwargs.pop('dry_run', False)
+        if dry_run:
+            from .estimate import estimate_resources, format_resource_estimate
+            info = estimate_resources(
+                pretrained_model_name_or_path,
+                layer_shards_saving_path=kwargs.get('layer_shards_saving_path'),
+                compression=kwargs.get('compression'),
+                hf_token=kwargs.get('hf_token') or kwargs.get('token'),
+                max_seq_len=kwargs.get('max_seq_len', 512),
+            )
+            print(format_resource_estimate(info))
+            return info
 
         if is_on_mac_os:
             return AirLLMLlamaMlx(pretrained_model_name_or_path, *inputs, **kwargs)
