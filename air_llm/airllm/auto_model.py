@@ -26,6 +26,10 @@ ARCH_OVERRIDES = {
     "Qwen4ExpForConditionalGeneration": "AirLLMQwen4Exp",
 }
 
+# On macOS every model goes through AirLLMLlamaMlx, an MLX port of the Llama decoder block, so only
+# checkpoints with that layout can run there. Mistral uses the same block and weight names.
+MLX_ARCHITECTURES = {"LlamaForCausalLM", "MistralForCausalLM"}
+
 
 class AutoModel:
     def __init__(self):
@@ -35,7 +39,7 @@ class AutoModel:
         )
 
     @classmethod
-    def get_module_class(cls, pretrained_model_name_or_path, *inputs, **kwargs):
+    def get_architecture(cls, pretrained_model_name_or_path, *inputs, **kwargs):
         if 'hf_token' in kwargs:
             config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True,
                                                 token=kwargs['hf_token'])
@@ -43,7 +47,11 @@ class AutoModel:
             config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True)
 
         architectures = getattr(config, "architectures", None) or []
-        arch = architectures[0] if architectures else ""
+        return architectures[0] if architectures else ""
+
+    @classmethod
+    def get_module_class(cls, pretrained_model_name_or_path, *inputs, **kwargs):
+        arch = AutoModel.get_architecture(pretrained_model_name_or_path, *inputs, **kwargs)
 
         cls_name = ARCH_OVERRIDES.get(arch)
         if cls_name is None:
@@ -55,6 +63,14 @@ class AutoModel:
     def from_pretrained(cls, pretrained_model_name_or_path, *inputs, **kwargs):
 
         if is_on_mac_os:
+            # Check this before AirLLMLlamaMlx downloads and splits the whole checkpoint, otherwise an
+            # unsupported model only fails (or gives garbage) after that is done.
+            arch = AutoModel.get_architecture(pretrained_model_name_or_path, *inputs, **kwargs)
+            if arch and arch not in MLX_ARCHITECTURES:
+                raise ValueError(
+                    f"{arch} is not supported on macOS yet. The macOS backend (MLX) only runs "
+                    f"Llama-style models: {', '.join(sorted(MLX_ARCHITECTURES))}."
+                )
             return AirLLMLlamaMlx(pretrained_model_name_or_path, *inputs, **kwargs)
 
         module, class_name = AutoModel.get_module_class(pretrained_model_name_or_path, *inputs, **kwargs)

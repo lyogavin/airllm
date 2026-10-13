@@ -186,6 +186,7 @@ Just install airllm and run the code the same as on linux. See more in [Quick St
 * make sure you installed [mlx](https://github.com/ml-explore/mlx?tab=readme-ov-file#installation) and torch
 * you probably need to install python native see more [here](https://stackoverflow.com/a/65432861/21230266)
 * only [Apple silicon](https://support.apple.com/en-us/HT211814) is supported
+* only Llama-style models (`LlamaForCausalLM`, `MistralForCausalLM`) run on macOS for now; other architectures raise an error before anything is downloaded
 
 Example [python notebook] (https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
 
