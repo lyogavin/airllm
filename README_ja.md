@@ -4,7 +4,7 @@
 
 最初のQLoRAベースの33B完全オープンソースの中国語LLM
 
-*この内容を[中国語](README.md)で読む。この内容を[英語](README_en.md)で読む。*
+*この内容を[中国語](training/README.md)で読む。この内容を[英語](training/README_en.md)で読む。*
 
 
 <div align="left">
