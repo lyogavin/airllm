@@ -525,6 +525,50 @@ def link_or_copy_file(src, dst):
     return 'copy'
 
 
+# Leftover names a crash can leave next to an unfinished layer shard. The done marker is written
+# after the payload, so a payload without a marker is treated as corrupt and deleted on resume.
+_INCOMPLETE_SPLIT_SUFFIXES = (
+    'safetensors', 'safetensors.done',
+    'mlx.npz', 'mlx.done', 'mlx',
+    'mmap', 'mmap.json', 'mmap.done',
+)
+
+
+def remove_incomplete_layer_artifacts(layer, saving_path):
+    """Delete a half-written layer shard so the next split pass can save it cleanly.
+
+    Complete layers (payload + done marker) are left untouched. Returns True if anything was
+    removed.
+    """
+    if ModelPersister.get_model_persister().model_persist_exist(layer, saving_path):
+        return False
+    removed = False
+    saving_path = Path(saving_path)
+    for suffix in _INCOMPLETE_SPLIT_SUFFIXES:
+        path = saving_path / (layer + suffix)
+        if path.exists() or path.is_symlink():
+            path.unlink()
+            removed = True
+    return removed
+
+
+def _load_checkpoint_weight_file(checkpoint_path, filename, safetensors_format,
+                                 repo_id=None, hf_token=None, drop_marker=None):
+    """Load one checkpoint shard, downloading it first when it is not on disk yet."""
+    to_load = Path(checkpoint_path) / filename
+    if not os.path.exists(to_load):
+        assert repo_id is not None
+        huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
+                                          token=hf_token)
+    if not safetensors_format:
+        loaded = torch.load(to_load, map_location='cpu')
+    else:
+        loaded = load_file(to_load, device='cpu')
+    if drop_marker:
+        loaded = {k: v for k, v in loaded.items() if drop_marker not in k}
+    return loaded
+
+
 def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitted_model_dir_name='splitted_model',
                           compression=None, layer_names=None, delete_original=False, repo_id=None, hf_token=None):
     """
@@ -614,6 +658,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
     # check if splitting exists and all files are there
     found_layers = None
+    complete_layers = set()
     #print(f"checking exists: {saving_path}")
     if os.path.exists(saving_path):
         # dir already exists, check if all layer files are there
@@ -627,8 +672,15 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
             # already downloaded, return saving path...
             print(f"saved layers already found in {saving_path}")
             return str(saving_path)
-        else:
-            print(f"some layer splits found, some are not, re-save all layers in case there's some corruptions.")
+
+        complete_layers = {layer for layer, ok in found_layers.items() if ok}
+        incomplete_layers = [layer for layer in layers if not found_layers[layer]]
+        if complete_layers:
+            print(f"resuming split: {len(complete_layers)}/{len(layers)} layers already saved, "
+                  f"{len(incomplete_layers)} remaining. Already-saved layers are kept.")
+        for layer in incomplete_layers:
+            if remove_incomplete_layer_artifacts(layer, saving_path):
+                print(f"removed incomplete split for {layer}")
 
     # Some checkpoints are already sharded exactly one module per file (Kimi K3, for instance, ships
     # one ~17GB shard per decoder layer). Re-writing those into per-layer files would duplicate the
@@ -666,6 +718,9 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     shard = 0
     n_shards = len(set(index.values()))
     state_dict = {}
+    loaded_files = set()
+    process_layers = [layer for layer in layers if layer not in complete_layers] if complete_layers else layers
+    split_pbar_desc = 'resuming split' if complete_layers else 'saving layers'
 
     # Map shard ordinal -> actual checkpoint filename, taken straight from the index. We must NOT
     # reconstruct names like f"model-000{n:02d}-of-000{n_shards:02d}.safetensors": repos differ in
@@ -681,7 +736,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
     single_modelfile = None
 
-    for layer in tqdm(layers):
+    for layer in tqdm(process_layers, desc=split_pbar_desc):
 
         marker = (layer_names or {}).get('cpu_resident_marker')
         if marker and marker in layer:
@@ -711,7 +766,25 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         # Optionnally load next shard
         # checking whether after spliting from '-', if second element exists. otherwise it throws errors for single 'model.safetensor' files
         shards = [int(v.split('-')[1]) for k, v in index.items() if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
-        if len(shards) > 0:
+        drop_marker = (layer_names or {}).get('cpu_resident_marker')
+        if complete_layers:
+            # Resume: only load files that still hold unsaved layers. Skipping already-saved
+            # layers means the sequential shard cursor would walk past a file without reading it,
+            # so load by filename instead of by ordinal.
+            layer_files = {v for k, v in index.items() if layer_owner(k, layers) == layer}
+            for fname in sorted(layer_files):
+                if fname in loaded_files:
+                    continue
+                print(f'Loading {fname}')
+                loaded = _load_checkpoint_weight_file(
+                    checkpoint_path, fname, safetensors_format,
+                    repo_id=repo_id, hf_token=hf_token, drop_marker=drop_marker)
+                state_dict.update(loaded)
+                loaded_files.add(fname)
+            stale = [k for k in state_dict if layer_owner(k, layers) in complete_layers]
+            for k in stale:
+                del state_dict[k]
+        elif len(shards) > 0:
             # A layer can span several shards (especially fp8 checkpoints, where each weight has a
             # companion weight_scale_inv tensor). Load *every* shard up to the highest one this layer
             # references, not just the next one -- otherwise the layer is saved missing some tensors
