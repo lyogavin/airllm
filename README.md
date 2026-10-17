@@ -129,7 +129,7 @@ input_tokens = model.tokenizer(input_text,
     padding=False)
            
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device), 
     max_new_tokens=20,
     use_cache=True,
     return_dict_in_generate=True)
@@ -217,7 +217,7 @@ input_tokens = model.tokenizer(input_text,
     max_length=MAX_LENGTH, 
     padding=True)
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device), 
     max_new_tokens=5,
     use_cache= True,
     return_dict_in_generate=True)
@@ -237,7 +237,7 @@ input_tokens = model.tokenizer(input_text,
     truncation=True, 
     max_length=MAX_LENGTH)
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device), 
     max_new_tokens=5,
     use_cache=True,
     return_dict_in_generate=True)
@@ -260,7 +260,7 @@ input_tokens = model.tokenizer(input_text,
     truncation=True, 
     max_length=MAX_LENGTH)
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device), 
     max_new_tokens=5,
     use_cache=True,
     return_dict_in_generate=True)
@@ -369,7 +369,7 @@ encoded = tok(
     max_length=512,
 )
 loss = trainer.train_step(
-    encoded["input_ids"].cuda(),
+    encoded["input_ids"].to(model.device),
     attention_mask=encoded.get("attention_mask"),
 )
 print(loss)

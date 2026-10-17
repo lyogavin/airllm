@@ -20,7 +20,7 @@ input_tokens = model.tokenizer(input_text,
     padding=True)
            
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device), 
     max_new_tokens=2,
     use_cache=True,
     return_dict_in_generate=True)
