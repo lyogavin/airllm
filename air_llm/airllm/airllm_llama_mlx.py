@@ -182,6 +182,23 @@ def sample(logits, temperature=0):
     else:
         return mx.random.categorical(logits * (1 / temperature))
 
+
+def _coerce_to_mlx_array(x):
+    """Convert common tokenizer outputs to an MLX array for embedding lookup."""
+    if isinstance(x, mx.array):
+        return x
+
+    try:
+        import torch
+    except ImportError:
+        torch = None
+
+    if torch is not None and isinstance(x, torch.Tensor):
+        x = x.detach().cpu().numpy()
+
+    return mx.array(x)
+
+
 class AirLLMLlamaMlx:
 
     # customize layer names here
@@ -250,6 +267,7 @@ class AirLLMLlamaMlx:
 
 
     def generate(self, x, temperature=0, max_new_tokens=None, **kwargs):
+        x = _coerce_to_mlx_array(x)
         tokens = []
         for token in self.model_generate(x, temperature=temperature):
             tokens.append(token)
