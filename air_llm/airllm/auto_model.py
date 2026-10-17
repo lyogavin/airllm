@@ -24,6 +24,7 @@ ARCH_OVERRIDES = {
     "KimiK3ForConditionalGeneration": "AirLLMKimiK3",
     "Qwen3_5ForConditionalGeneration": "AirLLMQwen3_5",
     "Qwen4ExpForConditionalGeneration": "AirLLMQwen4Exp",
+    "Gemma4ForConditionalGeneration": "AirLLMGemma4",
 }
 
 
