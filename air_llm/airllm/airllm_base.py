@@ -17,17 +17,8 @@ from .profiler import LayeredProfiler
 
 from .utils import clean_memory, load_layer, layer_tensor_names, load_layer_subset, \
     find_or_create_local_splitted_path, load_merged_ngram_embedding, \
-    open_ngram_mmap_table, MmapEmbedding, _force_meta_embeddings
+    open_ngram_mmap_table, MmapEmbedding, _force_meta_embeddings, require_bitsandbytes
 from .persist import ModelPersister
-
-try:
-    import bitsandbytes as bnb
-
-    bitsandbytes_installed = True
-    print('>>>> bitsandbytes installed')
-except ImportError:
-    bitsandbytes_installed = False
-
 
 # Helpers that transformers 5.0 moved out of transformers.utils.generic. Remote model code is
 # routinely written against an older transformers and still imports them from the old location,
@@ -127,9 +118,8 @@ class AirLLMBaseModel:
         self.total_compression_overhead_time = None
         self.hf_quantizer = None
 
-        if compression is not None and not bitsandbytes_installed:
-            raise ImportError('WARNING: bitsandbytes not found. Compression needs bitsandbytes. '
-                              'To use compression, please install bitsandbytes: `pip install bitsandbytes`')
+        if compression is not None:
+            require_bitsandbytes()
 
         self.compression = compression
         self.hf_token = hf_token
