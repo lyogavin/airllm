@@ -83,7 +83,7 @@ def load_records(path) -> list:
     if not p.is_file():
         raise FileNotFoundError(p)
     suffix = p.suffix.lower()
-    text = p.read_text(encoding="utf-8")
+    text = p.read_text(encoding="utf-8-sig")
     records = []
     if suffix == ".txt":
         blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
