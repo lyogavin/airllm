@@ -98,7 +98,7 @@ pip install airllm
 
 Then, initialize AirLLMLlama2, pass in the huggingface repo ID of the model being used, or the local path, and inference can be performed similar to a regular transformer model.
 
-(*You can also specify the path to save the splitted layered model through **layer_shards_saving_path** when init AirLLMLlama2.*
+(*You can also specify the path to save the split layered model through **layer_shards_saving_path** when init AirLLMLlama2.*
 
 ```python
 from airllm import AutoModel
@@ -153,7 +153,7 @@ We just added model compression based on block-wise quantization-based model com
 #### How to enable model compression speed up:
 
 * Step 1. make sure you have [bitsandbytes](https://github.com/TimDettmers/bitsandbytes) installed by `pip install -U bitsandbytes `
-* Step 2. make sure airllm verion later than 2.0.0: `pip install -U airllm` 
+* Step 2. make sure airllm version later than 2.0.0: `pip install -U airllm` 
 * Step 3. when initialize the model, passing the argument compression ('4bit' or '8bit'):
 
 ```python
@@ -174,7 +174,7 @@ When initialize the model, we support the following configurations:
 
 * **compression**: supported options: 4bit, 8bit for 4-bit or 8-bit block-wise quantization, or by default None for no compression
 * **profiling_mode**: supported options: True to output time consumptions or by default False
-* **layer_shards_saving_path**: optionally another path to save the splitted model
+* **layer_shards_saving_path**: optionally another path to save the split model
 * **hf_token**: huggingface token can be provided here if downloading gated models like: *meta-llama/Llama-2-7b-hf*
 * **prefetching**: prefetching to overlap the model loading and compute. By default, turned on. For now, only AirLLMLlama2 supports this.
 * **delete_original**: if you don't have too much disk space, you can set delete_original to true to delete the original downloaded hugging face model, only keep the transformed one to save half of the disk space. 
