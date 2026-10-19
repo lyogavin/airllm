@@ -61,6 +61,12 @@ def get_model_args_from_config(config):
     params["vocab_size"] = config.vocab_size
     params["norm_eps"] = config.rms_norm_eps
     params["rope_traditional"] = False
+    # FIX #368: respect rope_theta from the HF config instead of always
+    # falling back to 10000 in sanitize_config(). Llama 3.x ships
+    # rope_theta=500000; ignoring it corrupts all outputs.
+    rope_theta = getattr(config, "rope_theta", None)
+    if rope_theta is not None:
+        params["rope_theta"] = rope_theta
 
     sconfig = sanitize_config(params)
 
