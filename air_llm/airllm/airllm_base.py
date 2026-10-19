@@ -16,8 +16,8 @@ from transformers.quantizers import AutoHfQuantizer
 from .profiler import LayeredProfiler
 
 from .utils import clean_memory, load_layer, layer_tensor_names, load_layer_subset, \
-    find_or_create_local_splitted_path, load_merged_ngram_embedding, \
-    open_ngram_mmap_table, MmapEmbedding, _force_meta_embeddings
+    find_or_create_local_splitted_path, load_prefer_no_remote_code, \
+    load_merged_ngram_embedding, open_ngram_mmap_table, MmapEmbedding, _force_meta_embeddings
 from .persist import ModelPersister
 
 try:
@@ -221,10 +221,11 @@ class AirLLMBaseModel:
             return GenerationConfig()
 
     def get_tokenizer(self, hf_token=None):
-        if hf_token is not None:
-            return AutoTokenizer.from_pretrained(self.model_local_path, token=hf_token, trust_remote_code=True)
-        else:
-            return AutoTokenizer.from_pretrained(self.model_local_path, trust_remote_code=True)
+        token_kwargs = {'token': hf_token} if hf_token is not None else {}
+        # Prefer transformers' native tokenizer; only trust the repo's remote code if it's required
+        # (custom tokenizers). Matches how the config/model are loaded above.
+        return load_prefer_no_remote_code(
+            AutoTokenizer.from_pretrained, self.model_local_path, **token_kwargs)
 
     # ---- model construction -----------------------------------------------------------------
 
