@@ -74,6 +74,18 @@ class TestLoadRecords(unittest.TestCase):
             recs = load_records(path)
             self.assertEqual([r["text"] for r in recs], ["x", "y"])
 
+    def test_utf8_bom_dataset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for suffix, data in (
+                (".json", json.dumps([{"text": "hello"}])),
+                (".jsonl", json.dumps({"text": "hello"}) + "\n"),
+                (".txt", "hello"),
+            ):
+                path = Path(tmp) / f"data{suffix}"
+                path.write_bytes(b"\xef\xbb\xbf" + data.encode("utf-8"))
+                with self.subTest(suffix=suffix):
+                    self.assertEqual(load_records(path)[0]["text"], "hello")
+
 
 class TestIterTrainItems(unittest.TestCase):
     def test_epochs_and_step_cap(self):

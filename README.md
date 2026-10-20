@@ -98,7 +98,7 @@ pip install airllm
 
 Then, initialize AirLLMLlama2, pass in the huggingface repo ID of the model being used, or the local path, and inference can be performed similar to a regular transformer model.
 
-(*You can also specify the path to save the splitted layered model through **layer_shards_saving_path** when init AirLLMLlama2.*
+(*You can also specify the path to save the split layered model through **layer_shards_saving_path** when init AirLLMLlama2.*
 
 ```python
 from airllm import AutoModel
@@ -129,7 +129,7 @@ input_tokens = model.tokenizer(input_text,
     padding=False)
            
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device), 
     max_new_tokens=20,
     use_cache=True,
     return_dict_in_generate=True)
@@ -155,7 +155,7 @@ We just added model compression based on block-wise quantization-based model com
 #### How to enable model compression speed up:
 
 * Step 1. make sure you have [bitsandbytes](https://github.com/TimDettmers/bitsandbytes) installed by `pip install -U bitsandbytes `
-* Step 2. make sure airllm verion later than 2.0.0: `pip install -U airllm` 
+* Step 2. make sure airllm version later than 2.0.0: `pip install -U airllm` 
 * Step 3. when initialize the model, passing the argument compression ('4bit' or '8bit'):
 
 ```python
@@ -176,7 +176,7 @@ When initialize the model, we support the following configurations:
 
 * **compression**: supported options: 4bit, 8bit for 4-bit or 8-bit block-wise quantization, or by default None for no compression
 * **profiling_mode**: supported options: True to output time consumptions or by default False
-* **layer_shards_saving_path**: optionally another path to save the splitted model
+* **layer_shards_saving_path**: optionally another path to save the split model
 * **hf_token**: huggingface token can be provided here if downloading gated models like: *meta-llama/Llama-2-7b-hf*
 * **prefetching**: prefetching to overlap the model loading and compute. By default, turned on. For now, only AirLLMLlama2 supports this.
 * **delete_original**: if you don't have too much disk space, you can set delete_original to true to delete the original downloaded hugging face model, only keep the transformed one to save half of the disk space. 
@@ -188,6 +188,7 @@ Just install airllm and run the code the same as on linux. See more in [Quick St
 * make sure you installed [mlx](https://github.com/ml-explore/mlx?tab=readme-ov-file#installation) and torch
 * you probably need to install python native see more [here](https://stackoverflow.com/a/65432861/21230266)
 * only [Apple silicon](https://support.apple.com/en-us/HT211814) is supported
+* only Llama-style models (`LlamaForCausalLM`, `MistralForCausalLM`) run on macOS for now; other architectures raise an error before anything is downloaded
 
 Example [python notebook] (https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
 
@@ -219,7 +220,7 @@ input_tokens = model.tokenizer(input_text,
     max_length=MAX_LENGTH, 
     padding=True)
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device), 
     max_new_tokens=5,
     use_cache= True,
     return_dict_in_generate=True)
@@ -239,7 +240,7 @@ input_tokens = model.tokenizer(input_text,
     truncation=True, 
     max_length=MAX_LENGTH)
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device), 
     max_new_tokens=5,
     use_cache=True,
     return_dict_in_generate=True)
@@ -262,7 +263,7 @@ input_tokens = model.tokenizer(input_text,
     truncation=True, 
     max_length=MAX_LENGTH)
 generation_output = model.generate(
-    input_tokens['input_ids'].cuda(), 
+    input_tokens['input_ids'].to(model.device), 
     max_new_tokens=5,
     use_cache=True,
     return_dict_in_generate=True)
@@ -371,7 +372,7 @@ encoded = tok(
     max_length=512,
 )
 loss = trainer.train_step(
-    encoded["input_ids"].cuda(),
+    encoded["input_ids"].to(model.device),
     attention_mask=encoded.get("attention_mask"),
 )
 print(loss)

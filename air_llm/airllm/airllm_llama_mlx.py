@@ -13,7 +13,7 @@ import mlx.nn as nn
 from sentencepiece import SentencePieceProcessor
 from .persist import ModelPersister
 import psutil
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, AutoModel, GenerationMixin, LlamaForCausalLM, GenerationConfig
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, AutoModel, GenerationMixin, GenerationConfig
 from .utils import clean_memory, load_layer, \
     find_or_create_local_splitted_path
 
@@ -61,6 +61,12 @@ def get_model_args_from_config(config):
     params["vocab_size"] = config.vocab_size
     params["norm_eps"] = config.rms_norm_eps
     params["rope_traditional"] = False
+    # FIX #368: respect rope_theta from the HF config instead of always
+    # falling back to 10000 in sanitize_config(). Llama 3.x ships
+    # rope_theta=500000; ignoring it corrupts all outputs.
+    rope_theta = getattr(config, "rope_theta", None)
+    if rope_theta is not None:
+        params["rope_theta"] = rope_theta
 
     sconfig = sanitize_config(params)
 
@@ -182,6 +188,23 @@ def sample(logits, temperature=0):
     else:
         return mx.random.categorical(logits * (1 / temperature))
 
+
+def _coerce_to_mlx_array(x):
+    """Convert common tokenizer outputs to an MLX array for embedding lookup."""
+    if isinstance(x, mx.array):
+        return x
+
+    try:
+        import torch
+    except ImportError:
+        torch = None
+
+    if torch is not None and isinstance(x, torch.Tensor):
+        x = x.detach().cpu().numpy()
+
+    return mx.array(x)
+
+
 class AirLLMLlamaMlx:
 
     # customize layer names here
@@ -250,6 +273,7 @@ class AirLLMLlamaMlx:
 
 
     def generate(self, x, temperature=0, max_new_tokens=None, **kwargs):
+        x = _coerce_to_mlx_array(x)
         tokens = []
         for token in self.model_generate(x, temperature=temperature):
             tokens.append(token)
