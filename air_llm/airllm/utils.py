@@ -530,7 +530,7 @@ def link_or_copy_file(src, dst):
 _INCOMPLETE_SPLIT_SUFFIXES = (
     'safetensors', 'safetensors.done',
     'mlx.npz', 'mlx.done', 'mlx',
-    'mmap', 'mmap.json', 'mmap.done',
+    'mmap', 'mmap.tmp', 'mmap.json', 'mmap.done',
 )
 
 
@@ -550,6 +550,26 @@ def remove_incomplete_layer_artifacts(layer, saving_path):
             path.unlink()
             removed = True
     return removed
+
+
+def restore_linked_layer_marker(layer, passthrough, checkpoint_path, saving_path):
+    """Re-mark a passthrough shard whose link exists but whose done marker does not.
+
+    A linked shard is the original checkpoint file under a second name, so it is complete as soon
+    as the link exists. Resume re-adds the marker instead of unlinking and relinking it, so it never
+    touches the checkpoint file the link shares its data with. A copy (not the same file) is left
+    to the normal incomplete-layer cleanup. Returns True if the layer is now complete.
+    """
+    if layer not in passthrough:
+        return False
+    dst = Path(saving_path) / (layer + 'safetensors')
+    try:
+        same = os.path.samefile(os.path.realpath(str(Path(checkpoint_path) / passthrough[layer])), dst)
+    except OSError:
+        return False
+    if same:
+        (Path(saving_path) / (layer + 'safetensors.done')).touch()
+    return same
 
 
 def _load_checkpoint_weight_file(checkpoint_path, filename, safetensors_format,
@@ -656,32 +676,6 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     layers.sort(key=lambda layer: (_last_shard_of(layer), -len(layer)))
 
 
-    # check if splitting exists and all files are there
-    found_layers = None
-    complete_layers = set()
-    #print(f"checking exists: {saving_path}")
-    if os.path.exists(saving_path):
-        # dir already exists, check if all layer files are there
-
-        found_layers = {}
-        for layer in layers:
-            found_layers[layer] = ModelPersister.get_model_persister().model_persist_exist(layer, saving_path)
-
-        print(f"found_layers:{found_layers}")
-        if all(found_layers.values()):
-            # already downloaded, return saving path...
-            print(f"saved layers already found in {saving_path}")
-            return str(saving_path)
-
-        complete_layers = {layer for layer, ok in found_layers.items() if ok}
-        incomplete_layers = [layer for layer in layers if not found_layers[layer]]
-        if complete_layers:
-            print(f"resuming split: {len(complete_layers)}/{len(layers)} layers already saved, "
-                  f"{len(incomplete_layers)} remaining. Already-saved layers are kept.")
-        for layer in incomplete_layers:
-            if remove_incomplete_layer_artifacts(layer, saving_path):
-                print(f"removed incomplete split for {layer}")
-
     # Some checkpoints are already sharded exactly one module per file (Kimi K3, for instance, ships
     # one ~17GB shard per decoder layer). Re-writing those into per-layer files would duplicate the
     # entire checkpoint on disk -- 1.5TB+ for a 2.8T-parameter model -- and take hours, to produce
@@ -706,6 +700,34 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     if passthrough:
         print(f"{len(passthrough)}/{len(layers)} modules are already one-per-shard; "
               f"linking to the original files instead of copying them.")
+
+    # check if splitting exists and all files are there
+    found_layers = None
+    complete_layers = set()
+    #print(f"checking exists: {saving_path}")
+    if os.path.exists(saving_path):
+        # dir already exists, check if all layer files are there
+
+        found_layers = {}
+        for layer in layers:
+            found_layers[layer] = (
+                ModelPersister.get_model_persister().model_persist_exist(layer, saving_path)
+                or restore_linked_layer_marker(layer, passthrough, checkpoint_path, saving_path))
+
+        print(f"found_layers:{found_layers}")
+        if all(found_layers.values()):
+            # already downloaded, return saving path...
+            print(f"saved layers already found in {saving_path}")
+            return str(saving_path)
+
+        complete_layers = {layer for layer, ok in found_layers.items() if ok}
+        incomplete_layers = [layer for layer in layers if not found_layers[layer]]
+        if complete_layers:
+            print(f"resuming split: {len(complete_layers)}/{len(layers)} layers already saved, "
+                  f"{len(incomplete_layers)} remaining. Already-saved layers are kept.")
+        for layer in incomplete_layers:
+            if remove_incomplete_layer_artifacts(layer, saving_path):
+                print(f"removed incomplete split for {layer}")
 
     # Must exist before check_space, which stats the filesystem it lives on.
     saving_path.mkdir(parents=True, exist_ok=True)

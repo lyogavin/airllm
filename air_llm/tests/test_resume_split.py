@@ -28,7 +28,11 @@ from airllm.persist.safetensor_model_persister import SafetensorModelPersister
 
 _persister_mod.model_persister = SafetensorModelPersister()
 
-from airllm.utils import split_and_save_layers, remove_incomplete_layer_artifacts
+from airllm.utils import (
+    split_and_save_layers,
+    remove_incomplete_layer_artifacts,
+    open_ngram_mmap_table,
+)
 
 N_LAYERS = 3
 LAYER_PREFIX = "model.layers"
@@ -156,6 +160,193 @@ class TestResumeSplit(unittest.TestCase):
         self._split()
         for f in files:
             self.assertEqual(f.stat().st_mtime, mtimes[f.name], f"{f.name} was rewritten")
+
+
+
+def _save_checkpoint(root, shards):
+    weight_map = {}
+    for fname, sd in shards.items():
+        save_file(sd, str(Path(root) / fname))
+        for k in sd:
+            weight_map[k] = fname
+    with open(Path(root) / "model.safetensors.index.json", "w") as f:
+        json.dump({"metadata": {"total_size": 1}, "weight_map": weight_map}, f)
+
+
+def _snapshot(path):
+    st = os.stat(path)
+    return st.st_ino, st.st_mtime
+
+
+FLASH_PREFIX = "model.language_model.layers"
+FLASH_NGRAM = f"{FLASH_PREFIX}.1.ple.ple_embedding.ngram_embedding"
+FLASH_LAYER_NAMES = {
+    'embed': 'model.language_model.embed_tokens',
+    'layer_prefix': FLASH_PREFIX,
+    'norm': 'model.language_model.hyper_connection_mixer',
+    'lm_head': 'lm_head',
+    'cpu_resident_marker': 'ple.ple_embedding.ngram_embedding',
+}
+
+
+class TestResumeFlashNextNgramSibling(unittest.TestCase):
+    """Layer 1 is peeled into ``...ngram_embedding.mmap`` plus ``layers.1.safetensors``.
+
+    Losing one of the two siblings must not rewrite the other, which still has its done marker.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.shards = {
+            "model-00001-of-00002.safetensors": {
+                "model.language_model.embed_tokens.weight": torch.randn(16, 8),
+                f"{FLASH_PREFIX}.0.self_attn.q_proj.weight": torch.randn(8, 8),
+            },
+            "model-00002-of-00002.safetensors": {
+                f"{FLASH_PREFIX}.1.mlp.experts.gate_up_proj": torch.randn(4, 8, 8),
+                f"{FLASH_PREFIX}.1.ple.key_proj.weight": torch.randn(8, 8),
+                f"{FLASH_NGRAM}.shard_0.weight": torch.arange(12, dtype=torch.float32).reshape(3, 4),
+                f"{FLASH_NGRAM}.shard_1.weight": torch.arange(12, 24, dtype=torch.float32).reshape(3, 4),
+                "model.language_model.hyper_connection_mixer.hc_norm.weight": torch.randn(8),
+                "lm_head.weight": torch.randn(16, 8),
+            },
+        }
+        _save_checkpoint(self.root, self.shards)
+        self.out = self._split()
+        old = time.time() - 120
+        for f in self.out.iterdir():
+            os.utime(f, (old, old))
+        self.layer1 = self.out / f"{FLASH_PREFIX}.1.safetensors"
+        self.mmap = self.out / f"{FLASH_NGRAM}.mmap"
+        self.table = torch.cat([self.shards["model-00002-of-00002.safetensors"][f"{FLASH_NGRAM}.shard_{i}.weight"]
+                                for i in range(2)], dim=0)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _split(self):
+        return Path(split_and_save_layers(self.root, layer_names=FLASH_LAYER_NAMES))
+
+    def test_deleting_the_parent_layer_keeps_the_ngram_mmap(self):
+        mmap_files = [self.out / f"{FLASH_NGRAM}.{s}" for s in ("mmap", "mmap.json", "mmap.done")]
+        before = {f.name: _snapshot(f) for f in mmap_files}
+        self.layer1.unlink()
+        (self.out / f"{FLASH_PREFIX}.1.safetensors.done").unlink()
+
+        self._split()
+
+        self.assertEqual({f.name: _snapshot(f) for f in mmap_files}, before, "n-gram mmap was rewritten")
+        self.assertTrue((self.out / f"{FLASH_PREFIX}.1.safetensors.done").exists())
+        layer1 = load_file(str(self.layer1))
+        src = self.shards["model-00002-of-00002.safetensors"]
+        self.assertEqual(set(layer1), {f"{FLASH_PREFIX}.1.mlp.experts.gate_up_proj",
+                                       f"{FLASH_PREFIX}.1.ple.key_proj.weight"})
+        for k, v in layer1.items():
+            self.assertTrue(torch.equal(v, src[k]), f"{k} changed on resume")
+        self.assertTrue(torch.equal(open_ngram_mmap_table(self.out, FLASH_NGRAM), self.table))
+
+    def test_deleting_only_the_mmap_keeps_the_parent_layer(self):
+        before = _snapshot(self.layer1)
+        self.mmap.unlink()
+
+        self._split()
+
+        self.assertEqual(_snapshot(self.layer1), before, "parent layer 1 was rewritten")
+        self.assertTrue((self.out / f"{FLASH_PREFIX}.1.safetensors.done").exists())
+        self.assertTrue((self.out / f"{FLASH_NGRAM}.mmap.done").exists())
+        self.assertTrue(torch.equal(open_ngram_mmap_table(self.out, FLASH_NGRAM), self.table))
+
+
+KIMI_PREFIX = "language_model.model.layers"
+KIMI_LAYER_NAMES = {
+    'embed': 'language_model.model.embed_tokens',
+    'layer_prefix': KIMI_PREFIX,
+    'norm': 'language_model.model.norm',
+    'lm_head': 'language_model.lm_head',
+}
+
+
+class TestResumePassthroughLinks(unittest.TestCase):
+    """Kimi-style one-file-per-layer shards are hard-linked into the split dir.
+
+    Resume must never unlink or rewrite the original checkpoint file behind such a link.
+    """
+
+    N = 3
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        n_shards = self.N + 1
+        self.shards = {}
+        for i in range(self.N):
+            self.shards[f"model-{i + 1:05d}-of-{n_shards:05d}.safetensors"] = {
+                f"{KIMI_PREFIX}.{i}.mlp.w1.weight": torch.randn(8, 8),
+                f"{KIMI_PREFIX}.{i}.input_layernorm.weight": torch.randn(8),
+            }
+        self.shards[f"model-{n_shards:05d}-of-{n_shards:05d}.safetensors"] = {
+            "language_model.model.embed_tokens.weight": torch.randn(16, 8),
+            "language_model.model.norm.weight": torch.randn(8),
+            "language_model.lm_head.weight": torch.randn(16, 8),
+        }
+        _save_checkpoint(self.root, self.shards)
+        self.out = self._split()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _split(self):
+        return Path(split_and_save_layers(self.root, layer_names=KIMI_LAYER_NAMES))
+
+    def _src(self, i):
+        return self.root / f"model-{i + 1:05d}-of-{self.N + 1:05d}.safetensors"
+
+    def _dst(self, i):
+        return self.out / f"{KIMI_PREFIX}.{i}.safetensors"
+
+    def _assert_originals_intact(self):
+        for fname, sd in self.shards.items():
+            path = self.root / fname
+            self.assertTrue(path.exists(), f"original {fname} was removed")
+            loaded = load_file(str(path))
+            self.assertEqual(set(loaded), set(sd))
+            for k, v in sd.items():
+                self.assertTrue(torch.equal(loaded[k], v), f"{k} changed in original {fname}")
+
+    def test_linked_layer_missing_its_marker_is_not_unlinked(self):
+        """A crash between link and marker leaves a complete link with no ``.done``."""
+        self.assertEqual(os.stat(self._src(1)).st_ino, os.stat(self._dst(1)).st_ino)
+        # Any unlink or link of the shared inode bumps its ctime, so an unchanged ctime proves resume
+        # left the link (and the original checkpoint file behind it) alone.
+        before = (os.stat(self._dst(1)).st_ino, os.stat(self._src(1)).st_ctime_ns)
+        (self.out / f"{KIMI_PREFIX}.1.safetensors.done").unlink()
+        time.sleep(0.05)
+
+        self._split()
+
+        self.assertEqual((os.stat(self._dst(1)).st_ino, os.stat(self._src(1)).st_ctime_ns), before,
+                         "linked layer was unlinked and relinked")
+        self.assertTrue((self.out / f"{KIMI_PREFIX}.1.safetensors.done").exists())
+        self.assertEqual(os.stat(self._src(1)).st_nlink, 2)
+        self._assert_originals_intact()
+
+    def test_resume_relinks_a_deleted_layer_and_keeps_originals(self):
+        self._dst(1).unlink()
+        (self.out / f"{KIMI_PREFIX}.1.safetensors.done").unlink()
+        embed = self.out / "language_model.model.embed_tokens.safetensors"
+        embed.unlink()
+        (self.out / "language_model.model.embed_tokens.safetensors.done").unlink()
+
+        self._split()
+
+        for i in range(self.N):
+            self.assertEqual(os.stat(self._src(i)).st_ino, os.stat(self._dst(i)).st_ino,
+                             f"layer {i} is no longer linked to its original")
+        src = self.shards[f"model-{self.N + 1:05d}-of-{self.N + 1:05d}.safetensors"]
+        self.assertTrue(torch.equal(load_file(str(embed))["language_model.model.embed_tokens.weight"],
+                                    src["language_model.model.embed_tokens.weight"]))
+        self._assert_originals_intact()
 
 
 if __name__ == '__main__':
