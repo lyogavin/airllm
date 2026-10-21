@@ -7,9 +7,6 @@ is_on_mac_os = False
 if platform == "darwin":
     is_on_mac_os = True
 
-if is_on_mac_os:
-    from airllm import AirLLMLlamaMlx
-
 # Architectures that need a dedicated AirLLM subclass because of a non-standard module layout
 # (custom remote-code models). Everything else uses the generic AirLLMBaseModel, which streams any
 # standard *ForCausalLM (model.model.layers + lm_head / norm) and lets transformers own the
@@ -52,21 +49,23 @@ class AutoModel:
         return "airllm", cls_name
 
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, *inputs, **kwargs):
-        dry_run = kwargs.pop('dry_run', False)
-        if dry_run:
-            from .estimate import estimate_resources, format_resource_estimate
-            info = estimate_resources(
-                pretrained_model_name_or_path,
-                layer_shards_saving_path=kwargs.get('layer_shards_saving_path'),
-                compression=kwargs.get('compression'),
-                hf_token=kwargs.get('hf_token') or kwargs.get('token'),
-                max_seq_len=kwargs.get('max_seq_len', 512),
-            )
-            print(format_resource_estimate(info))
-            return info
+    def estimate(cls, pretrained_model_name_or_path, **kwargs):
+        from .estimate import estimate_resources, format_resource_estimate
+        info = estimate_resources(
+            pretrained_model_name_or_path,
+            layer_shards_saving_path=kwargs.get('layer_shards_saving_path'),
+            compression=kwargs.get('compression'),
+            hf_token=kwargs.get('hf_token') or kwargs.get('token'),
+            max_seq_len=kwargs.get('max_seq_len', 512),
+            prefetching=kwargs.get('prefetching', True),
+        )
+        print(format_resource_estimate(info))
+        return info
 
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *inputs, **kwargs):
         if is_on_mac_os:
+            from airllm import AirLLMLlamaMlx
             return AirLLMLlamaMlx(pretrained_model_name_or_path, *inputs, **kwargs)
 
         module, class_name = AutoModel.get_module_class(pretrained_model_name_or_path, *inputs, **kwargs)

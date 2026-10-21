@@ -1,5 +1,6 @@
 """Disk and peak-VRAM estimates that do not download model weight shards."""
 
+import importlib
 import json
 import os
 import shutil
@@ -238,9 +239,26 @@ def _find_split_cache(checkpoint_path, layer_shards_saving_path, compression):
     return None, 0, 0
 
 
+def _arch_layer_names(arch):
+    """Layer-name dict from the streaming class registered in ``ARCH_OVERRIDES``."""
+    from .auto_model import ARCH_OVERRIDES
+    cls_name = ARCH_OVERRIDES.get(arch or "")
+    stem = {
+        "AirLLMChatGLM": "chatglm", "AirLLMQWen": "qwen", "AirLLMBaichuan": "baichuan",
+        "AirLLMInternLM": "internlm", "AirLLMKimiK3": "kimi_k3",
+        "AirLLMQwen3_5": "qwen3_5", "AirLLMQwen4Exp": "qwen4_exp",
+    }.get(cls_name or "")
+    if not stem:
+        return None
+    cls = getattr(importlib.import_module(f".airllm_{stem}", __package__), cls_name)
+    obj = cls.__new__(cls)
+    obj.set_layer_names_dict()
+    return obj.layer_names_dict
+
+
 def estimate_resources(model_local_path_or_repo_id, layer_shards_saving_path=None,
                        compression=None, hf_token=None, layer_names=None,
-                       max_seq_len=512):
+                       max_seq_len=512, prefetching=True):
     """Estimate checkpoint disk, split-copy disk, layer-cache size, and peak VRAM.
 
     Weight shards are not downloaded. For a Hub repo this uses file metadata plus
@@ -279,30 +297,50 @@ def estimate_resources(model_local_path_or_repo_id, layer_shards_saving_path=Non
     if not file_sizes and metadata.get('total_size'):
         file_sizes = {'_index_total': int(metadata['total_size'])}
 
+    config = _read_config(checkpoint_path=checkpoint_path, repo_id=repo_id, hf_token=hf_token)
+    # Nested VL checkpoints keep the decoder shape under text_config / llm_config.
+    config = {**config, **(config.get('text_config') or config.get('llm_config') or {})}
+    if layer_names is None:
+        layer_names = _arch_layer_names((config.get('architectures') or [None])[0])
+
     checkpoint_bytes = int(sum(file_sizes.values()))
     n_shards = len(file_sizes)
     layers = _layer_prefixes(weight_map, layer_names=layer_names) if weight_map else []
     layer_bytes = _layer_bytes_from_files(weight_map, file_sizes, layers) if layers else {}
     n_modules = len(layers)
 
-    config = _read_config(checkpoint_path=checkpoint_path, repo_id=repo_id, hf_token=hf_token)
     n_layers = (config.get('num_hidden_layers') or config.get('n_layer')
                 or config.get('num_layers') or 0)
     if not n_layers and layers:
-        decoder = [l for l in layers if '.layers.' in l]
+        decoder = [name for name in layers if name.strip('.').rsplit('.', 1)[-1].isdigit()]
         n_layers = len(decoder) or n_modules
 
-    largest_layer_name = None
-    largest_layer_bytes = 0
-    if layer_bytes:
-        largest_layer_name, largest_layer_bytes = max(layer_bytes.items(), key=lambda kv: kv[1])
-    elif n_layers:
+    cpu, resident = set(), set()
+    if layer_names:
+        cpu = {n.rstrip('.') for n in cpu_resident_module_names(layer_names, weight_map)}
+        resident = {n.rstrip('.') for n in layer_names.get('resident', [])}
+    streamed, resident_bytes = [], 0
+    for name, nbytes in layer_bytes.items():
+        bare = name.rstrip('.')
+        if bare in cpu:
+            continue
+        if bare in resident:
+            resident_bytes += nbytes
+        else:
+            streamed.append((name, nbytes))
+    streamed.sort(key=lambda kv: kv[1], reverse=True)
+    largest_layer_name, largest_layer_bytes = streamed[0] if streamed else (None, 0)
+    second_layer_bytes = streamed[1][1] if prefetching and len(streamed) > 1 else 0
+    if not streamed and n_layers:
         largest_layer_bytes = checkpoint_bytes // int(n_layers)
+        second_layer_bytes = largest_layer_bytes if prefetching else 0
         notes.append("Per-layer sizes were not in the index; peak VRAM uses checkpoint / n_layers.")
 
     avg_layer_bytes = (checkpoint_bytes // int(n_layers)) if n_layers else 0
     kv_bytes = _kv_cache_bytes(config, max_seq_len=max_seq_len)
-    peak_vram = largest_layer_bytes + kv_bytes + _VRAM_OVERHEAD_BYTES
+    # Resident modules stay on GPU; prefetch holds another streamed layer. CPU-mmap tables do not.
+    peak_vram = (largest_layer_bytes + second_layer_bytes + resident_bytes
+                 + kv_bytes + _VRAM_OVERHEAD_BYTES)
 
     split_bytes = int(checkpoint_bytes * _split_factor(compression))
     disk_keep_both = checkpoint_bytes + split_bytes
@@ -327,8 +365,13 @@ def estimate_resources(model_local_path_or_repo_id, layer_shards_saving_path=Non
         notes.append(f"compression={compression} estimated split size is {int(_split_factor(compression)*100)}% of the checkpoint.")
 
     n_experts = config.get('num_experts') or config.get('num_local_experts') or config.get('n_routed_experts')
-    if n_experts:
+    if n_experts and (layer_names or {}).get('expert_prefix'):
         notes.append(f"MoE with {n_experts} experts; per-expert streaming may use less VRAM than a full layer.")
+    elif n_experts:
+        notes.append(f"MoE with {n_experts} packed experts; they stream with the layer and count toward peak VRAM.")
+    if layer_names and (resident or cpu):
+        extra = " and a prefetched second layer" if prefetching else ""
+        notes.append(f"Peak VRAM includes resident modules{extra}; CPU-mmap tables are excluded.")
 
     dtype = config.get('torch_dtype') or 'unknown'
     arch = (config.get('architectures') or ['unknown'])[0]

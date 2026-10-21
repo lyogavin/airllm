@@ -120,11 +120,65 @@ class TestEstimateResources(unittest.TestCase):
         text = format_resource_estimate(info)
         self.assertIn('splitted_model', text)
 
-    def test_automodel_dry_run_is_wired(self):
-        src = (_AIRLLM_DIR / 'auto_model.py').read_text()
-        self.assertIn("kwargs.pop('dry_run', False)", src)
-        init_src = (_AIRLLM_DIR / '__init__.py').read_text()
-        self.assertIn('estimate_resources', init_src)
+    def test_override_layer_names_match_streaming(self):
+        from airllm.estimate import _arch_layer_names
+        expected = {
+            "Qwen3_5ForConditionalGeneration": "model.language_model.layers",
+            "Qwen4ExpForConditionalGeneration": "model.language_model.layers",
+            "KimiK3ForConditionalGeneration": "language_model.model.layers",
+        }
+        for arch, prefix in expected.items():
+            names = _arch_layer_names(arch)
+            self.assertEqual(names["layer_prefix"], prefix)
+            self.assertNotEqual(prefix, "model.layers")
+
+    def test_nested_vl_decoder_is_not_model_layers(self):
+        root = self.root / "vl"
+        root.mkdir()
+        ngram = "model.language_model.layers.0.ple.ple_embedding.ngram_embedding"
+        shards = {
+            "layer0.safetensors": {
+                "model.language_model.layers.0.self_attn.q_proj.weight": torch.randn(64, 64),
+                "model.language_model.layers.0.mlp.experts.gate_up_proj": torch.randn(4, 32, 32),
+            },
+            "ngram.safetensors": {f"{ngram}.weight": torch.randn(256, 256)},
+            "rest.safetensors": {
+                "model.visual.patch_embed.proj.weight": torch.randn(16, 8),
+                "model.language_model.embed_tokens.weight": torch.randn(8, 8),
+                "model.language_model.layers.1.self_attn.q_proj.weight": torch.randn(8, 8),
+                "model.language_model.hyper_connection_mixer.hc_norm.weight": torch.randn(8),
+                "lm_head.weight": torch.randn(8, 8),
+            },
+        }
+        weight_map = {}
+        for fname, sd in shards.items():
+            save_file(sd, str(root / fname))
+            weight_map.update({k: fname for k in sd})
+        (root / "model.safetensors.index.json").write_text(json.dumps({"weight_map": weight_map}))
+        (root / "config.json").write_text(json.dumps({
+            "architectures": ["Qwen4ExpForConditionalGeneration"],
+            "text_config": {
+                "hidden_size": 16, "num_hidden_layers": 2, "num_attention_heads": 4,
+                "num_key_value_heads": 2, "head_dim": 4, "num_experts": 4,
+            },
+            "torch_dtype": "float16",
+        }))
+        info = estimate_resources(str(root))
+        largest = (info["largest_layer"] or "").rstrip(".")
+        self.assertTrue(largest.startswith("model.language_model.layers."))
+        self.assertFalse(largest.startswith("model.layers."))
+        self.assertNotIn("ngram", largest)
+        self.assertNotIn("visual", largest)
+        self.assertEqual(info["n_layers"], 2)
+        self.assertLess(info["largest_layer_bytes"], os.path.getsize(root / "ngram.safetensors"))
+        self.assertGreater(
+            info["estimated_peak_vram_bytes"],
+            info["largest_layer_bytes"] + info["kv_cache_bytes"] + 256 * 1024 * 1024,
+        )
+        src = (_AIRLLM_DIR / "auto_model.py").read_text()
+        self.assertIn("def estimate(", src)
+        self.assertNotIn("dry_run", src)
+        self.assertIn("estimate_resources", (_AIRLLM_DIR / "__init__.py").read_text())
 
 
 if __name__ == '__main__':
