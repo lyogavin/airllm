@@ -1,11 +1,12 @@
 from sys import platform
 
+from .estimate import estimate_resources as estimate_resources
+from .estimate import format_resource_estimate as format_resource_estimate
+
 is_on_mac_os = False
 
 if platform == "darwin":
     is_on_mac_os = True
-
-from .estimate import estimate_resources, format_resource_estimate
 
 if is_on_mac_os:
     from .airllm_llama_mlx import AirLLMLlamaMlx

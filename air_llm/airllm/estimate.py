@@ -127,10 +127,10 @@ def _layer_prefixes(weight_map, layer_names=None):
             layers = [layer_names['rotary_pos_emb']] + layers
         layers = layers + list(layer_names.get('resident', []))
         layers = layers + cpu_resident_module_names(layer_names, keys)
-        layers = [l + '.' for l in layers]
-    layers = [l for l in layers if any(k.startswith(l) for k in keys)]
+        layers = [name + '.' for name in layers]
+    layers = [name for name in layers if any(k.startswith(name) for k in keys)]
     owned = {layer_owner(k, layers) for k in weight_map}
-    return [l for l in layers if l in owned]
+    return [name for name in layers if name in owned]
 
 
 def _layer_bytes_from_files(weight_map, file_sizes, layers):
@@ -319,10 +319,11 @@ def estimate_resources(model_local_path_or_repo_id, layer_shards_saving_path=Non
     if layer_names:
         cpu = {n.rstrip('.') for n in cpu_resident_module_names(layer_names, weight_map)}
         resident = {n.rstrip('.') for n in layer_names.get('resident', [])}
-    streamed, resident_bytes = [], 0
+    streamed, resident_bytes, cpu_bytes = [], 0, 0
     for name, nbytes in layer_bytes.items():
         bare = name.rstrip('.')
         if bare in cpu:
+            cpu_bytes += nbytes
             continue
         if bare in resident:
             resident_bytes += nbytes
@@ -394,7 +395,11 @@ def estimate_resources(model_local_path_or_repo_id, layer_shards_saving_path=Non
         'largest_layer': largest_layer_name,
         'largest_layer_bytes': int(largest_layer_bytes),
         'avg_layer_bytes': int(avg_layer_bytes),
+        'second_layer_bytes': int(second_layer_bytes),
+        'resident_bytes': int(resident_bytes),
+        'cpu_resident_bytes': int(cpu_bytes),
         'kv_cache_bytes': int(kv_bytes),
+        'overhead_bytes': _VRAM_OVERHEAD_BYTES,
         'max_seq_len': int(max_seq_len),
         'estimated_peak_vram_bytes': int(peak_vram),
         'compression': compression,

@@ -18,13 +18,13 @@ if 'airllm' not in sys.modules:
     _pkg.__path__ = [str(_AIRLLM_DIR)]
     sys.modules['airllm'] = _pkg
 
-from airllm.persist import model_persister as _persister_mod
-from airllm.persist.safetensor_model_persister import SafetensorModelPersister
+from airllm.persist import model_persister as _persister_mod  # noqa: E402
+from airllm.persist.safetensor_model_persister import SafetensorModelPersister  # noqa: E402
 
 _persister_mod.model_persister = SafetensorModelPersister()
 
-from airllm.estimate import estimate_resources, format_resource_estimate
-from airllm.utils import split_and_save_layers
+from airllm.estimate import estimate_resources, format_resource_estimate  # noqa: E402
+from airllm.utils import split_and_save_layers  # noqa: E402
 
 N_LAYERS = 3
 
@@ -132,22 +132,28 @@ class TestEstimateResources(unittest.TestCase):
             self.assertEqual(names["layer_prefix"], prefix)
             self.assertNotEqual(prefix, "model.layers")
 
-    def test_nested_vl_decoder_is_not_model_layers(self):
+    def _build_nested_vl_checkpoint(self):
+        # One owner per shard file (except the small embed/norm/lm_head file), so each module's
+        # estimated bytes are exactly that file's size on disk.
         root = self.root / "vl"
         root.mkdir()
         ngram = "model.language_model.layers.0.ple.ple_embedding.ngram_embedding"
         shards = {
             "layer0.safetensors": {
                 "model.language_model.layers.0.self_attn.q_proj.weight": torch.randn(64, 64),
-                "model.language_model.layers.0.mlp.experts.gate_up_proj": torch.randn(4, 32, 32),
+                # Packed MoE 3D expert tensors: they stream with the layer, not per expert.
+                "model.language_model.layers.0.mlp.experts.gate_up_proj": torch.randn(4, 64, 32),
+                "model.language_model.layers.0.mlp.experts.down_proj": torch.randn(4, 32, 32),
+            },
+            "layer1.safetensors": {
+                "model.language_model.layers.1.self_attn.q_proj.weight": torch.randn(32, 32),
             },
             "ngram.safetensors": {f"{ngram}.weight": torch.randn(256, 256)},
+            "visual.safetensors": {"model.visual.patch_embed.proj.weight": torch.randn(48, 16)},
             "rest.safetensors": {
-                "model.visual.patch_embed.proj.weight": torch.randn(16, 8),
-                "model.language_model.embed_tokens.weight": torch.randn(8, 8),
-                "model.language_model.layers.1.self_attn.q_proj.weight": torch.randn(8, 8),
-                "model.language_model.hyper_connection_mixer.hc_norm.weight": torch.randn(8),
-                "lm_head.weight": torch.randn(8, 8),
+                "model.language_model.embed_tokens.weight": torch.randn(4, 4),
+                "model.language_model.hyper_connection_mixer.hc_norm.weight": torch.randn(4),
+                "lm_head.weight": torch.randn(4, 4),
             },
         }
         weight_map = {}
@@ -163,23 +169,54 @@ class TestEstimateResources(unittest.TestCase):
             },
             "torch_dtype": "float16",
         }))
+        size = {name: os.path.getsize(root / name) for name in shards}
+        return root, size
+
+    def test_nested_vl_decoder_is_not_model_layers(self):
+        root, size = self._build_nested_vl_checkpoint()
         info = estimate_resources(str(root))
-        largest = (info["largest_layer"] or "").rstrip(".")
-        self.assertTrue(largest.startswith("model.language_model.layers."))
-        self.assertFalse(largest.startswith("model.layers."))
-        self.assertNotIn("ngram", largest)
-        self.assertNotIn("visual", largest)
+
+        self.assertEqual(info["largest_layer"], "model.language_model.layers.0.")
         self.assertEqual(info["n_layers"], 2)
-        self.assertLess(info["largest_layer_bytes"], os.path.getsize(root / "ngram.safetensors"))
-        self.assertGreater(
+
+        # Packed experts are part of layer 0: its bytes are the whole shard, which is larger
+        # than the attention weight alone (64*64 fp32 = 16384 bytes).
+        expert_bytes = (4 * 64 * 32 + 4 * 32 * 32) * 4
+        self.assertEqual(info["largest_layer_bytes"], size["layer0.safetensors"])
+        self.assertGreaterEqual(info["largest_layer_bytes"], 64 * 64 * 4 + expert_bytes)
+
+        # Prefetch holds the next-largest streamed module, decoder layer 1.
+        self.assertEqual(info["second_layer_bytes"], size["layer1.safetensors"])
+        # model.visual stays on GPU.
+        self.assertEqual(info["resident_bytes"], size["visual.safetensors"])
+        # The n-gram table is CPU mmap: counted, but not in VRAM.
+        self.assertEqual(info["cpu_resident_bytes"], size["ngram.safetensors"])
+
+        # KV: 2 layers * (K, V) * batch 1 * 512 seq * 2 kv heads * head_dim 4 * fp16 2 bytes.
+        self.assertEqual(info["kv_cache_bytes"], 2 * 2 * 1 * 512 * 2 * 4 * 2)
+        self.assertEqual(info["overhead_bytes"], 256 * 1024 * 1024)
+        self.assertEqual(
             info["estimated_peak_vram_bytes"],
-            info["largest_layer_bytes"] + info["kv_cache_bytes"] + 256 * 1024 * 1024,
+            size["layer0.safetensors"] + size["layer1.safetensors"] + size["visual.safetensors"]
+            + 32768 + 256 * 1024 * 1024,
         )
+
+    def test_no_prefetch_drops_only_the_second_layer(self):
+        root, size = self._build_nested_vl_checkpoint()
+        with_prefetch = estimate_resources(str(root))
+        without = estimate_resources(str(root), prefetching=False)
+        self.assertEqual(without["second_layer_bytes"], 0)
+        self.assertEqual(without["resident_bytes"], size["visual.safetensors"])
+        self.assertEqual(
+            with_prefetch["estimated_peak_vram_bytes"] - without["estimated_peak_vram_bytes"],
+            size["layer1.safetensors"],
+        )
+
+    def test_automodel_estimate_replaces_dry_run(self):
         src = (_AIRLLM_DIR / "auto_model.py").read_text()
         self.assertIn("def estimate(", src)
         self.assertNotIn("dry_run", src)
         self.assertIn("estimate_resources", (_AIRLLM_DIR / "__init__.py").read_text())
-
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
