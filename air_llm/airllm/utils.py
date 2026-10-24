@@ -621,8 +621,13 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     # When two modules share a last shard, the longer prefix goes first so a nested cpu-resident
     # table is extracted before its parent decoder layer can swallow it.
     def _last_shard_of(layer):
-        nums = [int(v.split('-')[1]) for k, v in index.items()
-                if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
+        nums = []
+        for k, v in index.items():
+            if k.startswith(layer) and '-' in v and len(v.split('-')) > 1:
+                try:
+                    nums.append(int(v.split('-')[1]))
+                except ValueError:
+                    pass
         return max(nums) if nums else -1
 
     layers.sort(key=lambda layer: (_last_shard_of(layer), -len(layer)))
@@ -694,8 +699,42 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                 shard_num_to_file[int(parts[1])] = v
             except ValueError:
                 pass
+    # Precompute layer -> shard numbers mapping to avoid O(layers × tensors) recomputation
+    # in the main loop. This mirrors the logic used for shard_num_to_file.
+    layer_to_shards = {}
+    for layer in layers:
+        shard_nums = []
+        for k, v in index.items():
+            if k.startswith(layer) and '-' in v and len(v.split('-')) > 1:
+                try:
+                    shard_nums.append(int(v.split('-')[1]))
+                except ValueError:
+                    pass
+        if shard_nums:
+            layer_to_shards[layer] = shard_nums
 
+    # Detect single-file checkpoints: all tensors map to the same file, and that file
+    # doesn't look like a sharded file (no '-NNN-of-' pattern). Load it once upfront.
     single_modelfile = None
+    unique_files = set(index.values())
+    if len(unique_files) == 1:
+        only_file = next(iter(unique_files))
+        if '-' not in only_file or len(only_file.split('-')) < 2:
+            single_modelfile = only_file
+            to_load = checkpoint_path / single_modelfile
+            if not os.path.exists(to_load):
+                assert repo_id is not None
+                huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
+                                                  token=hf_token)
+            print(f'Loading single-file checkpoint: {single_modelfile}')
+            if not safetensors_format:
+                loaded = torch.load(to_load, map_location='cpu')
+            else:
+                loaded = load_file(to_load, device='cpu')
+            marker = (layer_names or {}).get('cpu_resident_marker')
+            if marker:
+                loaded = {k: v for k, v in loaded.items() if marker not in k}
+            state_dict.update(loaded)
 
     for layer in tqdm(layers):
 
@@ -726,7 +765,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
         # Optionnally load next shard
         # checking whether after spliting from '-', if second element exists. otherwise it throws errors for single 'model.safetensor' files
-        shards = [int(v.split('-')[1]) for k, v in index.items() if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
+        shards = layer_to_shards.get(layer, [])
         if len(shards) > 0:
             # A layer can span several shards (especially fp8 checkpoints, where each weight has a
             # companion weight_scale_inv tensor). Load *every* shard up to the highest one this layer
@@ -759,7 +798,9 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                     loaded = {k: v for k, v in loaded.items() if marker not in k}
                 state_dict.update(loaded)
 
-        else:
+        elif single_modelfile is None:
+            # Multi-file but this layer's tensors aren't in layer_to_shards (unusual).
+            # Fall back to loading the file(s) this layer references.
             shards = [v for k, v in index.items() if k.startswith(layer)]
             single_modelfile = shards[0]
             to_load = checkpoint_path / single_modelfile
@@ -797,7 +838,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         del layer_state_dict
         clean_memory()
 
-    # deleting single modelfile if only a single modelfile was existing in hf repo 
+    # deleting single modelfile if only a single modelfile was existing in hf repo
     # and deletion of single modelfile should happen in the end if delete_original=True
     if delete_original and single_modelfile != None:
         to_delete = checkpoint_path / single_modelfile
