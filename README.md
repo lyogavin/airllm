@@ -142,6 +142,8 @@ print(output)
  
  
 Note: During inference, the original model will first be decomposed and saved layer-wise. Please ensure there is sufficient disk space in the huggingface cache directory.
+
+If splitting is interrupted (crash, Ctrl+C, disk full), run the same `from_pretrained` again. Layers that already have a `.done` marker are kept; only the remaining layers are rewritten.
  
 
 ## Model Compression - 3x Inference Speed Up!
@@ -394,7 +396,7 @@ A lot of the code are based on SimJeg's great work in the Kaggle exam competitio
 
 safetensors_rust.SafetensorError: Error while deserializing header: MetadataIncompleteBuffer
 
-If you run into this error, most possible cause is you run out of disk space. The process of splitting model is very disk-consuming. See [this](https://huggingface.co/TheBloke/guanaco-65B-GPTQ/discussions/12). You may need to extend your disk space, clear huggingface [.cache](https://huggingface.co/docs/datasets/cache) and rerun. 
+If you run into this error, most possible cause is you run out of disk space. The process of splitting model is very disk-consuming. See [this](https://huggingface.co/TheBloke/guanaco-65B-GPTQ/discussions/12). You may need to extend your disk space, then rerun — already-saved layer shards are kept, so a retry does not start from scratch. You can also clear huggingface [.cache](https://huggingface.co/docs/datasets/cache) if you need the room. 
 
 ### 2. ValueError: max() arg is an empty sequence
 
