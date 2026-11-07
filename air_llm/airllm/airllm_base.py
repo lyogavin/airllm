@@ -13,6 +13,7 @@ from accelerate import init_empty_weights
 from accelerate.utils.modeling import set_module_tensor_to_device
 from transformers.quantizers import AutoHfQuantizer
 
+from .arch_requirements import (_checkpoint_keys, missing_requirements, unsupported_reason)
 from .profiler import LayeredProfiler
 
 from .utils import clean_memory, load_layer, layer_tensor_names, load_layer_subset, \
@@ -55,6 +56,25 @@ def restore_relocated_transformers_symbols():
             setattr(generic, name, symbol)
 
 
+def _check_arch_requirements(config, model_type=None):
+    """Refuse models whose remote code cannot work on the installed transformers.
+
+    Some checkpoints pin themselves to one transformers major (Kimi K3 only loads on 4.56.x, see
+    ``arch_requirements``). Without this check the mismatch only shows up as "Could not
+    instantiate the model on meta from config" with a pile of unrelated Auto-class errors
+    attached, long after the split has started (issue #389). ``model_type`` names the family when
+    the class already knows which one it is; otherwise it is derived from the config.
+    """
+    keys = {model_type} if model_type else _checkpoint_keys(config)
+    reason = unsupported_reason(keys, version=getattr(transformers, "__version__", None))
+    if reason is not None:
+        raise RuntimeError(reason)
+    missing = missing_requirements(keys)
+    if missing:
+        print(f">>>> this checkpoint ({', '.join(sorted(keys))}) also needs: "
+              f"pip install {' '.join(missing)}")
+
+
 class AirLLMBaseModel:
     """
     Memory-frugal wrapper around a Hugging Face ``*ForCausalLM`` model.
@@ -73,6 +93,14 @@ class AirLLMBaseModel:
     # Upper bound on how much pinned (page-locked) host memory a single prefetched layer may use.
     # Layers larger than this are loaded into ordinary pageable memory instead.
     max_pinned_layer_bytes = 2 * 1024 ** 3
+
+    # Model family this class serves, used by _check_requirements. None means "read it from the
+    # config", which is right for the generic base class.
+    _requirements_key = None
+
+    def _check_requirements(self):
+        """Hook for subclasses: raise before the expensive split when the environment can't run."""
+        _check_arch_requirements(self.config, self._requirements_key)
 
     # Subclasses override this to point at non-standard module names.
     def set_layer_names_dict(self):
@@ -163,6 +191,11 @@ class AirLLMBaseModel:
             self.config = AutoConfig.from_pretrained(
                 self.model_local_path, trust_remote_code=True, **token_kwargs)
             self.trust_remote_code = True
+
+        # Fail fast, and with the real reason, before the checkpoint is split into layers (issue
+        # #389: a transformers/K3 mismatch surfaced only as "could not instantiate on meta" after
+        # the split). Only the architecture and versions are inspected here.
+        self._check_requirements()
 
         # Default to the model's native dtype (bf16 for most modern models). Forcing fp16 overflows
         # on deep models (e.g. Qwen3-235B's 94 layers) and produces garbage; bf16's wider range
@@ -271,6 +304,10 @@ class AirLLMBaseModel:
         ``*ForCausalLM`` class. That class expects a text config and either crashes or builds a
         model whose module names don't match the checkpoint. Conditional-generation architectures
         therefore try the image-text factories first.
+
+        Remote-code checkpoints only export the auto classes listed in their ``auto_map``, so
+        trying the others only produces guaranteed "Unrecognized configuration class" failures --
+        for Kimi K3 two of the four attempts, which buries the one error that actually matters.
         """
         archs = getattr(self.config, "architectures", None) or []
         arch = archs[0] if archs else ""
@@ -283,6 +320,9 @@ class AirLLMBaseModel:
             "AutoModelForMultimodalLM",
             "AutoModel",
         ])
+        auto_map = (getattr(self.config, "auto_map", None) or {}) if self.trust_remote_code else {}
+        if auto_map:
+            names = [name for name in names if name in auto_map]
         seen = set()
         classes = []
         for name in names:
