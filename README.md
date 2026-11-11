@@ -78,6 +78,7 @@
 * [Model Compression](#model-compression---3x-inference-speed-up)
 * [Configurations](#configurations)
 * [Run on MacOS](#macos)
+* [Chat models and streaming](#chat-models-and-streaming-output)
 * [Example notebooks](#example-python-notebook)
 * [Supported Models](#supported-models)
 * [Training](#training)
@@ -189,6 +190,48 @@ Just install airllm and run the code the same as on linux. See more in [Quick St
 * only Llama-style models (`LlamaForCausalLM`, `MistralForCausalLM`) run on macOS for now; other architectures raise an error before anything is downloaded
 
 Example [python notebook] (https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
+
+
+## Chat Models and Streaming Output
+
+Chat / instruct models work the same way as base models, but they expect their own prompt format. Build the prompt with the tokenizer's chat template — that is also where a system prompt goes. Pass a `TextStreamer` to print the reply as it is generated, which is handy with AirLLM: every new token streams all layers from disk, so a reply can take a while.
+
+```python
+from airllm import AutoModel
+from transformers import TextStreamer
+
+model = AutoModel.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
+
+messages = [
+    {"role": "system", "content": "You are a helpful assistant. Answer in one sentence."},
+    {"role": "user", "content": "What is the capital of United States?"},
+]
+
+inputs = model.tokenizer.apply_chat_template(
+    messages,
+    add_generation_prompt=True,
+    return_tensors="pt",
+    return_dict=True,
+).to(model.device)
+
+streamer = TextStreamer(model.tokenizer, skip_prompt=True, skip_special_tokens=True)
+
+generation_output = model.generate(
+    **inputs,
+    max_new_tokens=64,
+    use_cache=True,
+    streamer=streamer)
+```
+
+`generate` still returns the token ids, so for a multi-turn chat decode the new tokens and append them to `messages` as an `assistant` turn:
+
+```python
+reply = model.tokenizer.decode(generation_output[0][inputs['input_ids'].shape[1]:],
+                               skip_special_tokens=True)
+messages.append({"role": "assistant", "content": reply})
+```
+
+This example is for the default (PyTorch) backend. On macOS (MLX), `generate()` takes the input ids positionally, ignores `streamer` and returns the decoded text — see the [macOS notebook](https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb).
 
 
 ## Example Python Notebook
@@ -370,7 +413,7 @@ encoded = tok(
     max_length=512,
 )
 loss = trainer.train_step(
-    encoded["input_ids"].to(model.device),
+    encoded["input_ids"].to(trainer.device),
     attention_mask=encoded.get("attention_mask"),
 )
 print(loss)
