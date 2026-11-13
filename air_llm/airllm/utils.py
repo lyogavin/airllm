@@ -101,6 +101,109 @@ def default_device():
     return "cpu"
 
 
+_CUDA_SDPA_GQA_CACHE = {}
+
+
+def _has_fast_cuda_sdpa(params) -> bool:
+    """Return True if any non-math CUDA SDPA kernel is enabled and accepts ``params``."""
+    cuda_backends = getattr(torch.backends, "cuda", None)
+    if cuda_backends is None:
+        return False
+    checks = (
+        ("flash_sdp_enabled", "can_use_flash_attention"),
+        ("cudnn_sdp_enabled", "can_use_cudnn_attention"),
+        ("mem_efficient_sdp_enabled", "can_use_efficient_attention"),
+    )
+    for enabled_name, can_use_name in checks:
+        enabled_fn = getattr(cuda_backends, enabled_name, None)
+        can_use_fn = getattr(cuda_backends, can_use_name, None)
+        if not (callable(enabled_fn) and callable(can_use_fn)):
+            continue
+        try:
+            if enabled_fn() and can_use_fn(params):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _probe_cuda_sdpa_gqa_support(device, dtype, head_dim) -> bool:
+    """Detect whether CUDA SDPA can run native GQA (``enable_gqa=True``) without math fallback.
+
+    On setups without FlashAttention (such as official Windows PyTorch builds or SM75 GPUs),
+    ``mem_efficient`` SDPA refuses ``enable_gqa=True``, causing ``scaled_dot_product_attention`` to
+    fall back to the O(n^2) math kernel on GQA models. A tiny cached probe tells us whether
+    repeating KV heads upfront rescues execution onto a fast O(n) kernel.
+    """
+    device = torch.device(device) if not isinstance(device, torch.device) else device
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return True
+
+    cuda_backends = getattr(torch.backends, "cuda", None)
+    sdpa_params_cls = getattr(cuda_backends, "SDPAParams", None)
+    if sdpa_params_cls is None:
+        return True
+
+    flash_on = bool(getattr(cuda_backends, "flash_sdp_enabled", lambda: False)())
+    cudnn_on = bool(getattr(cuda_backends, "cudnn_sdp_enabled", lambda: False)())
+    eff_on = bool(getattr(cuda_backends, "mem_efficient_sdp_enabled", lambda: False)())
+    cache_key = (device.index, dtype, int(head_dim), flash_on, cudnn_on, eff_on)
+    cached = _CUDA_SDPA_GQA_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        is_initialized = getattr(torch.cuda, "is_initialized", None)
+        is_capturing = getattr(torch.cuda, "is_current_stream_capturing", None)
+        if callable(is_initialized) and is_initialized() and callable(is_capturing) and is_capturing():
+            return True
+        with torch.no_grad():
+            q = torch.empty((1, 2, 16, int(head_dim)), device=device, dtype=dtype)
+            k_gqa = torch.empty((1, 1, 16, int(head_dim)), device=device, dtype=dtype)
+            k_rep = torch.empty((1, 2, 16, int(head_dim)), device=device, dtype=dtype)
+            params_gqa = sdpa_params_cls(q, k_gqa, k_gqa, None, 0.0, True, True)
+            params_rep = sdpa_params_cls(q, k_rep, k_rep, None, 0.0, True, False)
+    except Exception:
+        return True
+
+    # Keep native enable_gqa=True unless it lacks a fast kernel and KV repeat rescues one.
+    supported = _has_fast_cuda_sdpa(params_gqa) or not _has_fast_cuda_sdpa(params_rep)
+    _CUDA_SDPA_GQA_CACHE[cache_key] = supported
+    return supported
+
+
+def configure_sdpa_gqa_fallback(device=None, dtype=None, head_dim=None, sdpa_module=None):
+    """Wrap ``transformers``'s ``use_gqa_in_sdpa`` to avoid O(n^2) math attention on GQA models."""
+    if sdpa_module is None:
+        try:
+            import transformers.integrations.sdpa_attention as sdpa_module
+        except ImportError:
+            return None
+
+    orig = getattr(sdpa_module, "_airllm_orig_use_gqa_in_sdpa", None)
+    if orig is None:
+        orig = getattr(sdpa_module, "use_gqa_in_sdpa", None)
+        if not callable(orig):
+            return None
+        sdpa_module._airllm_orig_use_gqa_in_sdpa = orig
+
+    if not getattr(sdpa_module.use_gqa_in_sdpa, "_airllm_patched", False):
+        def _airllm_use_gqa_in_sdpa(attention_mask, key, value, *args, **kwargs):
+            if not orig(attention_mask, key, value, *args, **kwargs):
+                return False
+            key_device = getattr(key, "device", None)
+            if getattr(key_device, "type", None) != "cuda":
+                return True
+            return _probe_cuda_sdpa_gqa_support(key_device, key.dtype, key.shape[-1])
+
+        _airllm_use_gqa_in_sdpa._airllm_patched = True
+        sdpa_module.use_gqa_in_sdpa = _airllm_use_gqa_in_sdpa
+
+    if device is not None and dtype is not None and head_dim:
+        return _probe_cuda_sdpa_gqa_support(device, dtype, head_dim)
+    return None
+
+
 def uncompress_layer_state_dict(layer_state_dict):
     uncompressed_layer_state_dict = None
     if any(['4bit' in k for k in layer_state_dict.keys()]):
