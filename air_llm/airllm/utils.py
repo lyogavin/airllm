@@ -101,6 +101,147 @@ def default_device():
     return "cpu"
 
 
+_CUDA_SDPA_GQA_CACHE = {}
+
+
+def _sdpa_kernel_context(backends):
+    """Context manager selecting specific SDPA backends using public PyTorch APIs."""
+    if hasattr(torch.nn, "attention") and hasattr(torch.nn.attention, "sdpa_kernel"):
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+
+        mapping = {
+            "flash": SDPBackend.FLASH_ATTENTION,
+            "cudnn": SDPBackend.CUDNN_ATTENTION,
+            "efficient": SDPBackend.EFFICIENT_ATTENTION,
+            "math": SDPBackend.MATH,
+        }
+        selected = [mapping[b] for b in backends if b in mapping]
+        return sdpa_kernel(selected)
+    cuda_backends = getattr(torch.backends, "cuda", None)
+    if cuda_backends and hasattr(cuda_backends, "sdp_kernel"):
+        return cuda_backends.sdp_kernel(
+            enable_flash="flash" in backends,
+            enable_cudnn="cudnn" in backends,
+            enable_mem_efficient="efficient" in backends,
+            enable_math="math" in backends,
+        )
+    from contextlib import nullcontext
+
+    return nullcontext()
+
+
+def _probe_cuda_sdpa_gqa_support(device, dtype, head_dim) -> bool:
+    """Detect whether CUDA SDPA can run native GQA (``enable_gqa=True``) without math fallback.
+
+    On setups without FlashAttention (such as official Windows PyTorch wheels or pre-Ampere GPUs),
+    ``mem_efficient`` SDPA refuses ``enable_gqa=True``, causing PyTorch to silently fall back to
+    the O(n^2) math kernel. Probing via public ``sdpa_kernel`` flags lets us detect whether
+    repeating KV heads upfront rescues execution onto the O(n) memory-efficient kernel.
+    """
+    device = torch.device(device) if not isinstance(device, torch.device) else device
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return True
+
+    cuda_backends = getattr(torch.backends, "cuda", None)
+    if cuda_backends is None:
+        return True
+
+    flash_on = bool(getattr(cuda_backends, "flash_sdp_enabled", lambda: False)())
+    cudnn_on = bool(getattr(cuda_backends, "cudnn_sdp_enabled", lambda: False)())
+    eff_on = bool(getattr(cuda_backends, "mem_efficient_sdp_enabled", lambda: False)())
+
+    # If mem-efficient is disabled or unavailable, fallback cannot help (nothing faster than math).
+    if not eff_on:
+        return True
+
+    cache_key = (device.index, dtype, int(head_dim), flash_on, cudnn_on, eff_on)
+    if cache_key in _CUDA_SDPA_GQA_CACHE:
+        return _CUDA_SDPA_GQA_CACHE[cache_key]
+
+    try:
+        is_init = getattr(torch.cuda, "is_initialized", None)
+        is_capturing = getattr(torch.cuda, "is_current_stream_capturing", None)
+        if callable(is_init) and is_init() and callable(is_capturing) and is_capturing():
+            return True
+
+        with torch.no_grad():
+            q = torch.empty((1, 2, 1, int(head_dim)), device=device, dtype=dtype)
+            k_gqa = torch.empty((1, 1, 1, int(head_dim)), device=device, dtype=dtype)
+            k_rep = torch.empty((1, 2, 1, int(head_dim)), device=device, dtype=dtype)
+
+            # 1. Can FlashAttention or cuDNN run native enable_gqa=True?
+            fast_backends = []
+            if flash_on:
+                fast_backends.append("flash")
+            if cudnn_on:
+                fast_backends.append("cudnn")
+
+            has_fast_gqa = False
+            if fast_backends:
+                try:
+                    with _sdpa_kernel_context(fast_backends):
+                        torch.nn.functional.scaled_dot_product_attention(
+                            q, k_gqa, k_gqa, is_causal=True, enable_gqa=True
+                        )
+                        has_fast_gqa = True
+                except Exception:
+                    pass
+
+            if has_fast_gqa:
+                _CUDA_SDPA_GQA_CACHE[cache_key] = True
+                return True
+
+            # 2. Can mem-efficient run with repeated KV (enable_gqa=False)?
+            has_fast_rep = False
+            try:
+                with _sdpa_kernel_context(["efficient"]):
+                    torch.nn.functional.scaled_dot_product_attention(
+                        q, k_rep, k_rep, is_causal=True
+                    )
+                    has_fast_rep = True
+            except Exception:
+                pass
+
+            # Only disable native GQA if GQA lacks a fast kernel and repeating KV rescues mem-efficient.
+            supported = not has_fast_rep
+            _CUDA_SDPA_GQA_CACHE[cache_key] = supported
+            return supported
+    except Exception:
+        return True
+
+
+def configure_sdpa_gqa_fallback(device=None, dtype=None, head_dim=None, sdpa_module=None):
+    """Wrap ``transformers``'s ``use_gqa_in_sdpa`` to avoid O(n^2) math attention on GQA models."""
+    if sdpa_module is None:
+        try:
+            import transformers.integrations.sdpa_attention as sdpa_module
+        except ImportError:
+            return None
+
+    orig = getattr(sdpa_module, "_airllm_orig_use_gqa_in_sdpa", None)
+    if orig is None:
+        orig = getattr(sdpa_module, "use_gqa_in_sdpa", None)
+        if not callable(orig):
+            return None
+        sdpa_module._airllm_orig_use_gqa_in_sdpa = orig
+
+    if not getattr(sdpa_module.use_gqa_in_sdpa, "_airllm_patched", False):
+        def _airllm_use_gqa_in_sdpa(attention_mask, key, value, *args, **kwargs):
+            if not orig(attention_mask, key, value, *args, **kwargs):
+                return False
+            key_device = getattr(key, "device", None)
+            if getattr(key_device, "type", None) != "cuda":
+                return True
+            return _probe_cuda_sdpa_gqa_support(key_device, key.dtype, key.shape[-1])
+
+        _airllm_use_gqa_in_sdpa._airllm_patched = True
+        sdpa_module.use_gqa_in_sdpa = _airllm_use_gqa_in_sdpa
+
+    if device is not None and dtype is not None and head_dim:
+        return _probe_cuda_sdpa_gqa_support(device, dtype, head_dim)
+    return None
+
+
 def uncompress_layer_state_dict(layer_state_dict):
     uncompressed_layer_state_dict = None
     if any(['4bit' in k for k in layer_state_dict.keys()]):
