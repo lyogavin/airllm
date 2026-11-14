@@ -1,4 +1,4 @@
-from .airllm_base import AirLLMBaseModel
+from .airllm_base import AirLLMBaseModel, _check_arch_requirements
 
 
 class AirLLMKimiK3(AirLLMBaseModel):
@@ -14,6 +14,13 @@ class AirLLMKimiK3(AirLLMBaseModel):
     individually rather than by layer: expanded, a layer's experts are ~55GB but a token needs
     ~1GB of them.
     """
+
+    # Checked before the split, not after: K3's remote code needs transformers 4.56.x, and the
+    # generic failure ("Could not instantiate the model on meta", issue #389) hides that entirely.
+    _requirements_key = 'kimi_k3'
+
+    def _check_requirements(self):
+        _check_arch_requirements(self.config, self._requirements_key)
 
     def set_layer_names_dict(self):
         self.layer_names_dict = {
