@@ -370,7 +370,7 @@ encoded = tok(
     max_length=512,
 )
 loss = trainer.train_step(
-    encoded["input_ids"].to(model.device),
+    encoded["input_ids"].to(trainer.device),
     attention_mask=encoded.get("attention_mask"),
 )
 print(loss)
