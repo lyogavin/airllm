@@ -541,6 +541,136 @@ def link_or_copy_file(src, dst):
     return 'copy'
 
 
+def _has_module_prefix(keys, prefix):
+    if not prefix:
+        return False
+    needle = prefix if prefix.endswith('.') else prefix + '.'
+    return any(key.startswith(needle) for key in keys)
+
+
+def layer_ids_for_prefix(keys, layer_prefix):
+    """Decoder indices for ``layer_prefix``, matched on whole path components.
+
+    A substring test treats ``model.layers`` as present inside
+    ``language_model.layers`` and then tries to parse the token ``layers`` as
+    the layer number. Component matching only accepts ``.../<prefix>/<int>/...``.
+    """
+    prefix_parts = [part for part in layer_prefix.split('.') if part]
+    if not prefix_parts:
+        return set()
+    width = len(prefix_parts)
+    found = set()
+    for key in keys:
+        parts = key.split('.')
+        for i in range(len(parts) - width):
+            if parts[i:i + width] != prefix_parts:
+                continue
+            if i + width < len(parts) and parts[i + width].isdigit():
+                found.add(int(parts[i + width]))
+            break
+    return found
+
+
+def _discover_layer_prefix(keys):
+    """Pick a ``*.layers`` prefix when the configured one matches nothing.
+
+    Prefer a language-model stack over a vision tower that also has ``layers``.
+    """
+    counts = {}
+    for key in keys:
+        parts = key.split('.')
+        for i, part in enumerate(parts[:-1]):
+            if part == 'layers' and parts[i + 1].isdigit():
+                prefix = '.'.join(parts[:i + 1])
+                counts.setdefault(prefix, set()).add(int(parts[i + 1]))
+    if not counts:
+        return None
+
+    def score(prefix):
+        low = prefix.lower()
+        penalty = 1000 if any(tok in low for tok in ('vision', 'encoder', 'projector', 'embed_vision')) else 0
+        bonus = 100 if 'language_model' in low else 0
+        return (bonus - penalty, len(counts[prefix]), len(prefix))
+
+    return max(counts, key=score)
+
+
+def _first_present_module(keys, candidates):
+    for candidate in candidates:
+        if candidate and _has_module_prefix(keys, candidate):
+            return candidate
+    return None
+
+
+def align_layer_names(layer_names, keys):
+    """Point ``layer_names`` at the decoder stack that is actually in the checkpoint.
+
+    Standard ``model.layers`` checkpoints are left untouched. A nested layout such as
+    Gemma 4 (``model.language_model.layers``, plus a vision tower) is retargeted, and
+    modules outside that stack are kept as resident shards instead of being dropped.
+    """
+    keys = list(keys)
+    prefix = layer_names.get('layer_prefix') or 'model.layers'
+    ids = layer_ids_for_prefix(keys, prefix)
+    if ids:
+        return ids
+
+    discovered = _discover_layer_prefix(keys)
+    if not discovered:
+        return ids
+
+    layer_names['layer_prefix'] = discovered
+    parent = discovered[: -len('.layers')] if discovered.endswith('.layers') else discovered.rsplit('.', 1)[0]
+    if not _has_module_prefix(keys, layer_names.get('embed')):
+        embed = _first_present_module(keys, [
+            f'{parent}.embed_tokens' if parent else None,
+            'model.embed_tokens',
+            'embed_tokens',
+        ])
+        if embed:
+            layer_names['embed'] = embed
+    if not _has_module_prefix(keys, layer_names.get('norm')):
+        norm = _first_present_module(keys, [
+            f'{parent}.norm' if parent else None,
+            'model.norm',
+            'norm',
+        ])
+        if norm:
+            layer_names['norm'] = norm
+    if not _has_module_prefix(keys, layer_names.get('lm_head')):
+        head = _first_present_module(keys, [
+            'lm_head',
+            f'{parent}.lm_head' if parent else None,
+            'model.lm_head',
+        ])
+        if head:
+            layer_names['lm_head'] = head
+
+    resident = list(layer_names.get('resident', []))
+    claimed = [layer_names.get(name) for name in ('embed', 'norm', 'lm_head')]
+    claimed = [name for name in claimed if name]
+    seen = set(resident)
+    for key in keys:
+        if key.startswith(discovered + '.'):
+            continue
+        if parent and key.startswith(parent + '.'):
+            head = key[len(parent) + 1:].split('.', 1)[0]
+            if head in ('layers', 'embed_tokens', 'norm', 'lm_head'):
+                continue
+            module = f'{parent}.{head}'
+        else:
+            parts = key.split('.')
+            module = f'{parts[0]}.{parts[1]}' if parts[0] == 'model' and len(parts) > 1 else parts[0]
+        if any(module == name or module.startswith(name + '.') or name.startswith(module + '.') for name in claimed):
+            continue
+        if module not in seen:
+            seen.add(module)
+            resident.append(module)
+    if resident:
+        layer_names['resident'] = resident
+    return layer_ids_for_prefix(keys, discovered)
+
+
 def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitted_model_dir_name='splitted_model',
                           compression=None, layer_names=None, delete_original=False, repo_id=None, hf_token=None):
     """
@@ -588,23 +718,26 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
             f"model.safetensors(.index.json) or pytorch_model.bin(.index.json).")
 
     if layer_names is None:
-        n_layers = len(set([int(k.split('.')[2]) for k in index.keys() if 'model.layers' in k]))
-    else:
-        n_layers = len(set([int(k[len(layer_names['layer_prefix']):].split('.')[1]) for k in index.keys() if layer_names['layer_prefix'] in k]))
+        layer_names = {
+            'embed': 'model.embed_tokens',
+            'layer_prefix': 'model.layers',
+            'norm': 'model.norm',
+            'lm_head': 'lm_head',
+        }
+    layer_ids = align_layer_names(layer_names, index.keys())
+    # max+1 keeps a non-zero first index addressable; empty slots are dropped below.
+    n_layers = max(layer_ids) + 1 if layer_ids else 0
 
-    if layer_names is None:
-        layers = ['model.embed_tokens.'] + [f'model.layers.{i}.' for i in range(n_layers)] + ['model.norm.', 'lm_head.']
-    else:
-        layers = [layer_names['embed']] + [f'{layer_names["layer_prefix"]}.{i}' for i in range(n_layers)] + [layer_names['norm'], layer_names['lm_head']]
+    layers = [layer_names['embed']] + [f'{layer_names["layer_prefix"]}.{i}' for i in range(n_layers)] + [layer_names['norm'], layer_names['lm_head']]
 
-        if 'rotary_pos_emb' in layer_names:
-            layers = [layer_names['rotary_pos_emb']] + layers
-        # Modules that are not part of the streamed sequence but still need their weights on disk,
-        # e.g. a multimodal model's vision tower / projector, or extra top-level norms. They get
-        # their own shard and are loaded once and kept resident.
-        layers = layers + list(layer_names.get('resident', []))
-        layers = layers + cpu_resident_module_names(layer_names, index.keys())
-        layers = [l + "." for l in layers]
+    if 'rotary_pos_emb' in layer_names:
+        layers = [layer_names['rotary_pos_emb']] + layers
+    # Modules that are not part of the streamed sequence but still need their weights on disk,
+    # e.g. a multimodal model's vision tower / projector, or extra top-level norms. They get
+    # their own shard and are loaded once and kept resident.
+    layers = layers + list(layer_names.get('resident', []))
+    layers = layers + cpu_resident_module_names(layer_names, index.keys())
+    layers = [l + "." for l in layers]
 
     # Drop layers that have no weights in the checkpoint. This happens for tied embeddings,
     # where lm_head shares storage with embed_tokens and has no entry of its own. Without this we
