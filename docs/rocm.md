@@ -69,14 +69,20 @@ GPU kernels work. AirLLM decompresses shards into floating-point weights before
 layer execution; these paths do not use `Linear4bit` or `LLM.int8` GEMM kernels.
 Compression disables AirLLM prefetching.
 
-New 8-bit shards preserve the source dtype. Legacy shards remain readable as
-FP16, matching their previous behavior. To retain BF16 range, regenerate old
-compressed shards into a fresh `layer_shards_saving_path`; omitted dtype metadata
-cannot be recovered from a cached shard. NF4 already records its dtype.
+New 8-bit shards preserve the source dtype. Legacy shards remain readable with
+the existing FP16 fallback, matching their previous behavior. To preserve the
+original dtype, **delete and re-split 8bit caches**: remove the model's existing
+`splitted_model.8bit` directory, then load the original checkpoint again with
+`compression="8bit"`. Alternatively, use a fresh `layer_shards_saving_path` to
+keep the old cache while generating new shards. Re-splitting requires the
+original checkpoint weights; restore them first if they were deleted. Missing
+dtype metadata cannot be recovered from an old cached shard, so loading a legacy
+BF16 cache still reconstructs FP16 weights and can lose BF16 range. NF4 already
+records its dtype.
 
 ## Strix Halo validation
 
-The focused regression suite was validated on AMD Strix Halo, Radeon 8060S
+The original focused regression suite was validated on AMD Strix Halo, Radeon 8060S
 (`gfx1151`), Ubuntu 24.04 on WSL2, with:
 
 | Component | Tested version |
@@ -94,17 +100,34 @@ ROCm SDK core/libraries/device packages at 10.0.0 and a process-local ROCDXG
 library path. HIP's component version is distinct from the ROCm distribution
 version. No custom bitsandbytes build or GPU-architecture override was used.
 
-Run the tests from the checkout in the configured GPU environment:
+The tests now use Python's built-in unittest runner. From the checkout, run the
+optional-backend regression tests without enabling GPU work:
 
 ```bash
-python -m pip install pytest
-python -m pytest -q -s \
-  air_llm/tests/test_streaming_parity.py \
-  air_llm/tests/test_optional_compression.py \
-  air_llm/tests/test_compression_backend.py
+python -m unittest discover -s air_llm/tests -p 'test_optional_compression.py' -v
 ```
 
-All 15 cases passed. The locally generated small Llama checkpoint checks FP16
+The CPU end-to-end suite runs by default under unittest discovery on Linux and
+Windows, where AirLLM uses its PyTorch backend. It creates a tiny local Llama
+checkpoint and verifies streamed logits, repeated generation, and parameter
+eviction with prefetch disabled and enabled. It blocks bitsandbytes imports
+throughout AirLLM loading and inference, and requires no model downloads:
+
+```bash
+python -m unittest discover -s air_llm/tests -p 'test_streaming_cpu.py' -v
+```
+
+macOS skips this PyTorch CPU suite because its `AutoModel` entry point uses MLX.
+
+In a configured CUDA or ROCm environment, explicitly opt in to the GPU suites:
+
+```bash
+AIRLLM_GPU_TESTS=1 python -m unittest discover -s air_llm/tests -p 'test_streaming_parity.py' -v
+AIRLLM_GPU_TESTS=1 python -m unittest discover -s air_llm/tests -p 'test_compression_backend.py' -v
+```
+
+For the original validation recorded above, all 15 cases passed. The locally
+generated small Llama checkpoint checks FP16
 and BF16 streaming against resident Transformers, prefetch off/on, cached and
 repeated generation, parameter eviction to meta, and retained allocations.
 The optional-backend cases exercise missing/broken native imports. Seven GPU
@@ -112,7 +135,7 @@ compression cases check real NF4/8-bit kernels, persisted shard reconstruction,
 numerical error, BF16 values outside FP16 range, and legacy 8-bit compatibility.
 These tests require no pretrained model downloads.
 
-The same 15 cases also passed on an NVIDIA GeForce RTX 4070 Laptop GPU
+The same original 15 cases also passed on an NVIDIA GeForce RTX 4070 Laptop GPU
 (8 GB), Ubuntu 24.04, with driver 580.126.09, PyTorch 2.14.1+cu132,
 CUDA 13.2, Transformers 4.57.6, Accelerate 1.15.0, and bitsandbytes 0.50.2
 using native `libbitsandbytes_cuda132.so`. There were no skips, and `pip check`
@@ -134,7 +157,9 @@ under a 4 GiB PyTorch allocator limit. The uncompressed layer shards totaled
 PyTorch's GPU allocator; they exclude host memory, file cache, and native
 allocations outside that allocator. Vision-input inference was not tested.
 
-GPU tests skip when no GPU is available; a skipped run is not GPU validation.
+GPU tests are opt-in through `AIRLLM_GPU_TESTS=1` and skip when no GPU is
+available; a skipped run is not GPU validation. The hardware results above
+record the original suite before its conversion to unittest.
 This change does not establish support for all architectures, pretrained
 quantization formats, large-model memory bounds, or throughput.
 PyTorch describes the API convention in
