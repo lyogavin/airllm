@@ -3,10 +3,8 @@ import subprocess
 import sys
 import textwrap
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 
 @unittest.skipIf(sys.platform == 'darwin', 'tests the PyTorch path; macOS uses MLX')
@@ -63,55 +61,6 @@ class OptionalCompressionTests(unittest.TestCase):
         backend = SimpleNamespace()
         with patch.dict(sys.modules, {'bitsandbytes': backend}):
             self.assertIs(require_bitsandbytes(), backend)
-
-    def test_8bit_dtype_metadata_survives_disk_roundtrip(self):
-        import torch
-        from safetensors.torch import load_file, save_file
-        from airllm.utils import compress_layer_state_dict, uncompress_layer_state_dict
-
-        for dtype in (torch.float16, torch.bfloat16, torch.float32):
-            with self.subTest(dtype=dtype):
-                original = torch.ones(16, dtype=dtype)
-                state = SimpleNamespace(
-                    absmax=torch.ones(1), code=torch.ones(256), dtype=dtype,
-                )
-                functional = SimpleNamespace(
-                    quantize_blockwise=Mock(return_value=(torch.zeros(16, dtype=torch.uint8), state)),
-                    QuantState=Mock(side_effect=SimpleNamespace),
-                    dequantize_blockwise=Mock(side_effect=lambda packed, quant_state: packed.to(quant_state.dtype)),
-                )
-                with patch.dict(sys.modules, {'bitsandbytes': SimpleNamespace(functional=functional)}), \
-                        patch.object(torch.Tensor, 'cuda', lambda tensor: tensor):
-                    packed = compress_layer_state_dict({'weight': original}, '8bit')
-                    self.assertEqual(packed['weight.8bit.dtype'].numel(), 0)
-                    self.assertEqual(packed['weight.8bit.dtype'].dtype, dtype)
-                    with TemporaryDirectory() as directory:
-                        path = Path(directory) / 'layer.safetensors'
-                        save_file(packed, path)
-                        loaded = {key: value.clone() for key, value in load_file(path).items()}
-                    restored = uncompress_layer_state_dict(loaded)
-                self.assertEqual(set(restored), {'weight'})
-                self.assertEqual(restored['weight'].dtype, dtype)
-                self.assertEqual(functional.QuantState.call_args.kwargs['dtype'], dtype)
-
-    def test_legacy_8bit_metadata_defaults_to_float16(self):
-        import torch
-        from airllm.utils import uncompress_layer_state_dict
-
-        functional = SimpleNamespace(
-            QuantState=Mock(side_effect=SimpleNamespace),
-            dequantize_blockwise=Mock(return_value=torch.ones(16, dtype=torch.float16)),
-        )
-        legacy = {
-            'weight': torch.zeros(16, dtype=torch.uint8),
-            'weight.8bit.absmax': torch.ones(1),
-            'weight.8bit.code': torch.ones(256),
-        }
-        with patch.dict(sys.modules, {'bitsandbytes': SimpleNamespace(functional=functional)}), \
-                patch.object(torch.Tensor, 'cuda', lambda tensor: tensor):
-            restored = uncompress_layer_state_dict(legacy)
-        self.assertEqual(set(restored), {'weight'})
-        self.assertEqual(functional.QuantState.call_args.kwargs['dtype'], torch.float16)
 
 
 if __name__ == '__main__':

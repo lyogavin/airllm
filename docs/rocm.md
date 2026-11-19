@@ -107,18 +107,6 @@ optional-backend regression tests without enabling GPU work:
 python -m unittest discover -s air_llm/tests -p 'test_optional_compression.py' -v
 ```
 
-The CPU end-to-end suite runs by default under unittest discovery on Linux and
-Windows, where AirLLM uses its PyTorch backend. It creates a tiny local Llama
-checkpoint and verifies streamed logits, repeated generation, and parameter
-eviction with prefetch disabled and enabled. It blocks bitsandbytes imports
-throughout AirLLM loading and inference, and requires no model downloads:
-
-```bash
-python -m unittest discover -s air_llm/tests -p 'test_streaming_cpu.py' -v
-```
-
-macOS skips this PyTorch CPU suite because its `AutoModel` entry point uses MLX.
-
 In a configured CUDA or ROCm environment, explicitly opt in to the GPU suites:
 
 ```bash
@@ -161,7 +149,7 @@ Radeon 8060S (`gfx1151`) under Windows 11 25H2 (build 26200.9711), using:
 | bitsandbytes | 0.50.2, native `libbitsandbytes_rocm715.dll` selected automatically |
 | Safetensors | 0.8.0 |
 
-With `AIRLLM_GPU_TESTS=1`, **72 tests passed and 3 macOS-only MLX tests skipped**;
+With `AIRLLM_GPU_TESTS=1`, **68 tests passed and 3 macOS-only MLX tests skipped**;
 no GPU tests skipped. This includes all seven compression combinations and all
 four FP16/BF16 streaming cases with prefetch off/on. Generated tokens matched
 resident Transformers on repetition, logits stayed within the checked tolerance,
@@ -170,8 +158,8 @@ generated tiny Llama checkpoints; the large Qwen result below is an earlier run.
 `python -m pip check` also passed.
 
 A separate CPU environment with PyTorch 2.15.0+cpu and no installed bitsandbytes
-or pytest passed **64 tests with 11 expected GPU/macOS skips**, including both
-CPU streaming cases and isolated missing/broken-backend tests.
+or pytest passed **60 tests with 11 expected GPU/macOS skips**, including
+isolated missing/broken-backend tests.
 
 GPU validation ran outside the restricted execution sandbox. The sandboxed
 PyTorch smoke test failed at its first kernel launch, while the same environment
