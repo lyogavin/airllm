@@ -84,7 +84,7 @@ class AirLLMBaseModel:
     def __init__(self, model_local_path_or_repo_id, device=None, dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
                  hf_token=None, prefetching=True, delete_original=False,
-                 install_hooks=True, load_resident=True):
+                 install_hooks=True, load_resident=True, clean_memory_per_layer=True):
         """
         Parameters
         ----------
@@ -118,6 +118,13 @@ class AirLLMBaseModel:
         load_resident: bool, optional
             load ``resident`` modules (e.g. a vision tower) onto the GPU. Text-only LoRA
             training leaves them on meta.
+        clean_memory_per_layer: bool, optional
+            run ``clean_memory()`` (gc.collect, malloc_trim, torch.cuda.empty_cache) after every
+            streamed layer, default True. The evicted weights are freed by reference counting
+            anyway; with a transformers model in memory a full ``gc.collect()`` takes ~0.1 s, so
+            this costs seconds per generated token. False makes decoding several times faster
+            for small and mid-size models, at the cost of a somewhat higher peak VRAM because the
+            CUDA cache is no longer emptied between layers.
         """
 
         self.profiling_mode = profiling_mode
@@ -133,6 +140,7 @@ class AirLLMBaseModel:
                               'To use compression, please install bitsandbytes: `pip install bitsandbytes`')
 
         self.compression = compression
+        self.clean_memory_per_layer = clean_memory_per_layer
         self.hf_token = hf_token
 
         restore_relocated_transformers_symbols()
@@ -915,7 +923,8 @@ class AirLLMBaseModel:
                 set_module_tensor_to_device(self.model, param_name, 'meta')
         else:
             module.to('meta')
-        clean_memory()
+        if self.clean_memory_per_layer:
+            clean_memory()
         return output
 
     # ---- delegation to the underlying transformers model ------------------------------------
