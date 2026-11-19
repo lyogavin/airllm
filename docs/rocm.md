@@ -126,6 +126,13 @@ AIRLLM_GPU_TESTS=1 python -m unittest discover -s air_llm/tests -p 'test_streami
 AIRLLM_GPU_TESTS=1 python -m unittest discover -s air_llm/tests -p 'test_compression_backend.py' -v
 ```
 
+To run the full suite, including the GPU tests, from PowerShell:
+
+```powershell
+$env:AIRLLM_GPU_TESTS = "1"
+python -m unittest discover -v
+```
+
 For the original validation recorded above, all 15 cases passed. The locally
 generated small Llama checkpoint checks FP16
 and BF16 streaming against resident Transformers, prefetch off/on, cached and
@@ -140,6 +147,36 @@ The same original 15 cases also passed on an NVIDIA GeForce RTX 4070 Laptop GPU
 CUDA 13.2, Transformers 4.57.6, Accelerate 1.15.0, and bitsandbytes 0.50.2
 using native `libbitsandbytes_cuda132.so`. There were no skips, and `pip check`
 passed. Both FP16 and BF16 generated tokens matched the resident reference.
+
+### Native Windows validation with ROCm 10.2
+
+On November 18, 2026, the rebased branch passed full unittest discovery on the
+Radeon 8060S (`gfx1151`) under Windows 11 25H2 (build 26200.9711), using:
+
+| Component | Tested version |
+| --- | --- |
+| PyTorch | 2.13.0+rocm10.2.0 |
+| ROCm SDK / HIP component | 10.2.0 / 7.17.26434 |
+| Transformers / Accelerate | 4.57.6 / 1.16.0 |
+| bitsandbytes | 0.50.2, native `libbitsandbytes_rocm715.dll` selected automatically |
+| Safetensors | 0.8.0 |
+
+With `AIRLLM_GPU_TESTS=1`, **72 tests passed and 3 macOS-only MLX tests skipped**;
+no GPU tests skipped. This includes all seven compression combinations and all
+four FP16/BF16 streaming cases with prefetch off/on. Generated tokens matched
+resident Transformers on repetition, logits stayed within the checked tolerance,
+and retained GPU allocations stayed stable. These end-to-end checks use locally
+generated tiny Llama checkpoints; the large Qwen result below is an earlier run.
+`python -m pip check` also passed.
+
+A separate CPU environment with PyTorch 2.15.0+cpu and no installed bitsandbytes
+or pytest passed **64 tests with 11 expected GPU/macOS skips**, including both
+CPU streaming cases and isolated missing/broken-backend tests.
+
+GPU validation ran outside the restricted execution sandbox. The sandboxed
+PyTorch smoke test failed at its first kernel launch, while the same environment
+passed FP32/BF16 operations and the complete suite outside that sandbox. No
+graphics driver update or WSL installation was needed.
 
 ### Qwen3.8-27B text inference
 
