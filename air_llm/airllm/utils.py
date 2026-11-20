@@ -107,7 +107,14 @@ def uncompress_layer_state_dict(layer_state_dict):
         uncompressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
             if '4bit' not in k:
-                quant_state_dict = {kk[len(k):]: kv for kk, kv in layer_state_dict.items() if kk.startswith(k) and k != kk}
+                # only this tensor's own quant state: a bare ``startswith(k)`` also matched
+                # longer names sharing the prefix (e.g. ``w`` and ``w2``)
+                quant_state_dict = {kk[len(k):]: kv for kk, kv in layer_state_dict.items()
+                                    if kk.startswith(k + '.4bit.')}
+                if not quant_state_dict:
+                    # stored as is (1-D tensors are not compressed, see compress_layer_state_dict)
+                    uncompressed_layer_state_dict[k] = v
+                    continue
                 quant_state = bnb.functional.QuantState.from_dict(qs_dict=quant_state_dict, device="cuda")
 
                 dqv = bnb.functional.dequantize_nf4(v.cuda(), quant_state)
@@ -117,6 +124,9 @@ def uncompress_layer_state_dict(layer_state_dict):
         uncompressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
             if '8bit' not in k:
+                if k + ".8bit.absmax" not in layer_state_dict:
+                    uncompressed_layer_state_dict[k] = v  # stored as is (1-D tensor)
+                    continue
 
                 absmax = layer_state_dict[k + ".8bit.absmax"]
                 code = layer_state_dict[k + ".8bit.code"]
@@ -483,11 +493,21 @@ def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None
                                       f"existing space under {checkpoint_path if layer_shards_saving_path is None else layer_shards_saving_path} assuming can reuse: {total_saved_split_files_size_bytes/ 1024 / 1024 / 1024:.02f}GB. "
                                       )
 
+# Only weight matrices are quantized. 1-D tensors (norm weights, biases, per-layer scalars) are a
+# tiny share of the bytes, but quantizing them can break a model: Gemma 4 multiplies by its
+# RMSNorm weight directly (not ``1 + w``), and with NF4 norms every bf16 Gemma 4 model produces
+# gibberish. Weight-only quantizers (bitsandbytes, GPTQ, AWQ) leave them in full precision too.
+COMPRESS_MIN_DIM = 2
+
+
 def compress_layer_state_dict(layer_state_dict, compression=None):
     compressed_layer_state_dict = None
     if compression == '4bit':
         compressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
+            if v.dim() < COMPRESS_MIN_DIM:
+                compressed_layer_state_dict[k] = v
+                continue
             v_quant, quant_state = bnb.functional.quantize_nf4(v.cuda(), blocksize=64)
             compressed_layer_state_dict[k] = v_quant
             for quant_state_k, quant_state_v in save_quant_state_to_dict(quant_state).items():
@@ -495,6 +515,9 @@ def compress_layer_state_dict(layer_state_dict, compression=None):
     elif compression == '8bit':
         compressed_layer_state_dict = {}
         for k, v in layer_state_dict.items():
+            if v.dim() < COMPRESS_MIN_DIM:
+                compressed_layer_state_dict[k] = v
+                continue
             v_quant, quant_state = bnb.functional.quantize_blockwise(v.cuda(), blocksize=2048)
             absmax = quant_state.absmax.clone().contiguous()
             code = quant_state.code.clone().contiguous()
