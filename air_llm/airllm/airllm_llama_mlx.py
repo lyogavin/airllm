@@ -265,6 +265,21 @@ class AirLLMLlamaMlx:
         self.tokenizer = self.get_tokenizer(hf_token=hf_token)
 
 
+    def load_lm_head_weights(self):
+        """Return the weights for the output projection.
+
+        Models with tied input/output embeddings (config.tie_word_embeddings) have no lm_head
+        entry in the checkpoint, so the splitter writes no lm_head shard for them. In that case
+        the output projection shares the token embedding matrix, so load it from the embed shard.
+        """
+        persister = ModelPersister.get_model_persister()
+        lm_head_shard = Path(self.checkpoint_path) / (self.layer_names_dict['lm_head'] + ".mlx.npz")
+        if lm_head_shard.exists():
+            return persister.load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output']
+        if not getattr(self.config, "tie_word_embeddings", False):
+            raise FileNotFoundError(f"lm_head shard not found: {lm_head_shard}")
+        return persister.load_model(self.layer_names_dict['embed'], self.checkpoint_path)['tok_embeddings']
+
     def get_tokenizer(self, hf_token=None):
         if hf_token is not None:
             return AutoTokenizer.from_pretrained(self.model_local_path, token=hf_token, trust_remote_code=True)
@@ -363,7 +378,7 @@ class AirLLMLlamaMlx:
         self.record_memory('before_lmhead')
         self.output = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
         self.output.update(
-            ModelPersister.get_model_persister().load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output']
+            self.load_lm_head_weights()
         )
         y = self.output(x[:, -1])
         # force execution
@@ -448,7 +463,7 @@ class AirLLMLlamaMlx:
 
             if not self.test_nonlayered:
                 self.output = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
-                self.output.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output'])
+                self.output.update(self.load_lm_head_weights())
             y = sample(self.output(x[:, -1]))
 
             # force execution
