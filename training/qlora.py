@@ -279,10 +279,10 @@ class SampleGenerateCallback(transformers.TrainerCallback):
 class SavePeftModelCallback(transformers.TrainerCallback):
     def save_model(self, args, state, kwargs):
         logger.info('Saving PEFT checkpoint...')
-        if state.best_model_checkpoint is not None:
-            checkpoint_folder = os.path.join(state.best_model_checkpoint, "adapter_model")
-        else:
-            checkpoint_folder = os.path.join(args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}")
+        # Always save into the current step's checkpoint folder. Writing into
+        # state.best_model_checkpoint would overwrite the best adapter with the
+        # current weights.
+        checkpoint_folder = os.path.join(args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}")
 
         peft_model_path = os.path.join(checkpoint_folder, "adapter_model")
         kwargs["model"].save_pretrained(peft_model_path)
@@ -300,8 +300,10 @@ class SavePeftModelCallback(transformers.TrainerCallback):
             with open(fname, 'a'):
                 os.utime(fname, times)
 
-        touch(join(args.output_dir, 'completed'))
+        # Save first so a crash during the final save doesn't leave the run
+        # marked as completed.
         self.save_model(args, state, kwargs)
+        touch(join(args.output_dir, 'completed'))
 
 def get_accelerate_model(args, checkpoint_dir):
 
@@ -677,7 +679,11 @@ def train():
 
     checkpoint_dir, completed_training = get_last_checkpoint(args.output_dir)
     if completed_training:
-        logger.info('Detected that training was already completed!')
+        logger.info(
+            f"Detected that training was already completed in {args.output_dir}; nothing to do. "
+            "Remove the 'completed' file or use a new --output_dir to train again."
+        )
+        return
 
     model = get_accelerate_model(args, checkpoint_dir)
 
