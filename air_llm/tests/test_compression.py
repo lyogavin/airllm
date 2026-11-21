@@ -1,14 +1,17 @@
-import sys
+import os
 import unittest
 
 import torch
-sys.path.insert(0, '../airllm')
 
-from airllm import compress_layer_state_dict, uncompress_layer_state_dict
-
+from airllm.utils import compress_layer_state_dict, uncompress_layer_state_dict
 
 
 
+
+@unittest.skipUnless(
+    os.environ.get('AIRLLM_GPU_TESTS') == '1' and torch.cuda.is_available(),
+    'set AIRLLM_GPU_TESTS=1 and provide a CUDA or ROCm GPU',
+)
 class TestCompression(unittest.TestCase):
     def setUp(self):
         pass

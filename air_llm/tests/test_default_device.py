@@ -15,12 +15,13 @@ class TestDefaultDevice(unittest.TestCase):
 
     def setUp(self):
         self._cuda = torch.cuda.is_available
-        self._mps = getattr(torch.backends, 'mps', None)
+        mps = getattr(torch.backends, 'mps', None)
+        self._mps_is_available = mps.is_available if mps is not None else None
 
     def tearDown(self):
         torch.cuda.is_available = self._cuda
-        if self._mps is not None:
-            torch.backends.mps.is_available = self._mps.is_available
+        if self._mps_is_available is not None:
+            torch.backends.mps.is_available = self._mps_is_available
 
     def _fake(self, cuda, mps):
         torch.cuda.is_available = lambda: cuda
