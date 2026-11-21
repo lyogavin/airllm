@@ -17,7 +17,8 @@ from .profiler import LayeredProfiler
 
 from .utils import clean_memory, load_layer, layer_tensor_names, load_layer_subset, \
     find_or_create_local_splitted_path, load_merged_ngram_embedding, \
-    open_ngram_mmap_table, MmapEmbedding, _force_meta_embeddings, default_device
+    open_ngram_mmap_table, MmapEmbedding, _force_meta_embeddings, default_device, \
+    configure_sdpa_gqa_fallback
 from .persist import ModelPersister
 
 try:
@@ -333,16 +334,45 @@ class AirLLMBaseModel:
             f"Tried: {'; '.join(errors)}"
         )
 
+    def _configure_sdpa_gqa(self):
+        """Avoid CUDA O(n^2) math SDPA fallback on GQA models when flash SDPA cannot run."""
+        if self.device.type != "cuda":
+            return
+        text_cfg = getattr(self.config, "text_config", self.config)
+        head_dim = getattr(text_cfg, "head_dim", None)
+        if head_dim is None:
+            hidden = getattr(text_cfg, "hidden_size", None)
+            heads = getattr(text_cfg, "num_attention_heads", None)
+            if hidden and heads:
+                head_dim = hidden // heads
+        supported = configure_sdpa_gqa_fallback(
+            device=self.device,
+            dtype=self.running_dtype,
+            head_dim=head_dim,
+        )
+        num_heads = getattr(text_cfg, "num_attention_heads", None)
+        num_kv_heads = getattr(text_cfg, "num_key_value_heads", None)
+        if supported is False and num_heads and num_kv_heads and num_kv_heads < num_heads:
+            print(
+                "CUDA SDPA lacks a fast native GQA kernel here; repeating KV heads before SDPA "
+                "to avoid O(n^2) math attention memory."
+            )
+
     def init_model(self):
         # Build the real model on meta (no memory). include_buffers=False so non-persistent
         # buffers such as rotary inv_freq are actually computed (they aren't in the checkpoint).
         try:
             self.model = self._instantiate_on_meta("sdpa")
+            attn_impl = "sdpa"
         except Exception as e:
             print(f"attn_implementation='sdpa' not available ({e}), falling back to eager attention")
             # Some (often remote-code) architectures don't support sdpa and also default to it, so we
             # must request eager explicitly; otherwise transformers re-selects sdpa and errors again.
             self.model = self._instantiate_on_meta("eager")
+            attn_impl = "eager"
+
+        if attn_impl == "sdpa":
+            self._configure_sdpa_gqa()
 
         quantization_config = getattr(self.config, "quantization_config", None)
         if quantization_config is None:
