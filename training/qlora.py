@@ -511,7 +511,7 @@ def local_dataset(dataset_name):
     if dataset_name.endswith('.json'):
         full_dataset = Dataset.from_json(path_or_paths=dataset_name)
     elif dataset_name.endswith('.jsonl'):
-        full_dataset = Dataset.from_json(filename=dataset_name, format='jsonlines')
+        full_dataset = Dataset.from_json(path_or_paths=dataset_name)
     elif dataset_name.endswith('.csv'):
         full_dataset = Dataset.from_pandas(pd.read_csv(dataset_name))
     elif dataset_name.endswith('.tsv'):
@@ -571,8 +571,8 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
                     args.dataset_format = args.dataset_format if args.dataset_format else "alpaca"
                     full_dataset = local_dataset(dataset_name)
                     return full_dataset
-                except:
-                    raise ValueError(f"Error loading dataset from {dataset_name}")
+                except Exception as e:
+                    raise ValueError(f"Error loading dataset from {dataset_name}: {e}") from e
             else:
                 raise NotImplementedError(f"Dataset {dataset_name} not implemented yet.")
 
@@ -654,8 +654,9 @@ def get_last_checkpoint(checkpoint_dir):
         if is_completed: return None, True # already finished
         max_step = 0
         for filename in os.listdir(checkpoint_dir):
-            if isdir(join(checkpoint_dir, filename)) and filename.startswith('checkpoint'):
-                max_step = max(max_step, int(filename.replace('checkpoint-', '')))
+            step = filename[len('checkpoint-'):]
+            if isdir(join(checkpoint_dir, filename)) and filename.startswith('checkpoint-') and step.isdigit():
+                max_step = max(max_step, int(step))
         if max_step == 0: return None, is_completed # training started, but no checkpoint
         checkpoint_dir = join(checkpoint_dir, f'checkpoint-{max_step}')
         logger.info(f"Found a previous checkpoint at: {checkpoint_dir}")
