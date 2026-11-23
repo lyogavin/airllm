@@ -581,9 +581,12 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
     def format_dataset(dataset, dataset_format):
         if (
             dataset_format == 'alpaca' or dataset_format == 'alpaca-clean' or 
-            (dataset_format is None and args.dataset in ['alpaca', 'alpaca-clean'])
+            (dataset_format is None and args.dataset in ['alpaca', 'alpaca-clean', 'chinese-vicuna'])
         ):
-            dataset = dataset.map(extract_alpaca_dataset, remove_columns=['instruction'])
+            # Datasets that are already in input/output form (e.g. local files,
+            # which default to the alpaca format) have no instruction to fold in.
+            if 'instruction' in dataset.column_names['train']:
+                dataset = dataset.map(extract_alpaca_dataset, remove_columns=['instruction'])
         elif dataset_format == 'chip2' or (dataset_format is None and args.dataset == 'chip2'):
             dataset = dataset.map(lambda x: {
                 'input': x['text'].split('\n<bot>: ')[0].replace('<human>: ', ''),
