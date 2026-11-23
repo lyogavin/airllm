@@ -15,7 +15,7 @@ for _readme in (os.path.join(here, "README.md"), os.path.join(here, os.pardir, "
 
 setuptools.setup(
     name="airllm",
-    version="4.0.0",
+    version="4.0.1",
     author="Gavin Li",
     author_email="gavinli@animaai.cloud",
     description="AirLLM runs 70B large language models on a single 4GB GPU without quantization, "
