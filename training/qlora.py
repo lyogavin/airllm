@@ -254,16 +254,17 @@ class SampleGenerateCallback(transformers.TrainerCallback):
             '中国是否应该推出刺激政策救楼市？',
             '如何更好地融入新工作圈子'
         ]
-        if "model" in kwargs:
+        # Newer transformers pass the tokenizer as `processing_class`.
+        tokenizer = kwargs.get('processing_class') or kwargs.get('tokenizer')
+        if "model" in kwargs and tokenizer is not None:
             for sample_input in sample_inputs:
-                tokenizer = kwargs['tokenizer']
                 inputs = "Below is an instruction that describes a task. " \
                          "Write a response that appropriately completes the request.\n\n" \
                          "### Instruction:\n{sample_input}\n\n### Response: ".format(sample_input=sample_input)
                 logger.info(f"sample input: {inputs}")
                 model = kwargs['model']
                 input_ids = tokenizer(inputs, return_tensors="pt")['input_ids']
-                input_ids = input_ids.to('cuda')
+                input_ids = input_ids.to(model.device)
                 generation_output = model.generate(
                     input_ids=input_ids,
                     max_new_tokens=70,
@@ -272,7 +273,7 @@ class SampleGenerateCallback(transformers.TrainerCallback):
                 logger.info(f"sample output: {tokenizer.decode(generation_output[0])}")
 
         else:
-            logger.info(f"model not found in kwargs, skipping")
+            logger.info("model or tokenizer not found in kwargs, skipping")
 
 
 
