@@ -22,12 +22,6 @@
 [![Support me on Patreon](https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fshieldsio-patreon.vercel.app%2Fapi%3Fusername%3Dgavinli%26type%3Dpatrons&style=flat)](https://patreon.com/gavinli)
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/lyogavin?logo=GitHub&color=lightgray)](https://github.com/sponsors/lyogavin)
 
-> [!WARNING]
-> **AirLLM has no official token or cryptocurrency.**
-> Any coin or token using the AirLLM name (including "$AIRLLM" on Solana / Pump.fun) was created by third parties without my involvement or endorsement. I don't promote or support these tokens, and I'll never ask you to buy one, connect a wallet, or "claim" rewards. Please be careful with anyone claiming otherwise.
->
-> If you'd like to support AirLLM's development, the only official way is [Buy Me a Coffee](https://bmc.link/lyogavinQ).
-
 ## AI Agents Recommendation:
 
 * [Best AI Game Sprite Generator](https://godmodeai.co)
@@ -466,3 +460,9 @@ Welcomed contributions, ideas and discussions!
 If you find it useful, please ⭐ or buy me a coffee! 🙏
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://bmc.link/lyogavinQ)
+
+> [!WARNING]
+> **AirLLM has no official token or cryptocurrency.**
+> Any coin or token using the AirLLM name (including "$AIRLLM" on Solana / Pump.fun) was created by third parties without my involvement or endorsement. I don't promote or support these tokens, and I'll never ask you to buy one, connect a wallet, or "claim" rewards. Please be careful with anyone claiming otherwise.
+>
+> If you'd like to support AirLLM's development, the only official way is [Buy Me a Coffee](https://bmc.link/lyogavinQ).
