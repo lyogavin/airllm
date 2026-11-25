@@ -189,7 +189,7 @@ Just install airllm and run the code the same as on linux. See more in [Quick St
 * only [Apple silicon](https://support.apple.com/en-us/HT211814) is supported
 * only Llama-style models (`LlamaForCausalLM`, `MistralForCausalLM`) run on macOS for now; other architectures raise an error before anything is downloaded
 
-Example [python notebook] (https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
+Example [python notebook](https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
 
 
 ## Chat Models and Streaming Output
