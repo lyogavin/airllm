@@ -57,6 +57,10 @@ def get_model_args_from_config(config):
     params["n_heads"] = config.num_attention_heads
     if hasattr(config, "num_key_value_heads"):
         params["n_kv_heads"] = config.num_key_value_heads
+    # Mistral NeMo and Mistral Small 3 set head_dim=128 with hidden_size // num_attention_heads == 160.
+    head_dim = getattr(config, "head_dim", None)
+    if head_dim is not None:
+        params["head_dim"] = head_dim
     params["n_layers"] = config.num_hidden_layers
     params["vocab_size"] = config.vocab_size
     params["norm_eps"] = config.rms_norm_eps
@@ -65,6 +69,11 @@ def get_model_args_from_config(config):
     # falling back to 10000 in sanitize_config(). Llama 3.x ships
     # rope_theta=500000; ignoring it corrupts all outputs.
     rope_theta = getattr(config, "rope_theta", None)
+    if rope_theta is None:
+        # transformers 5 moved it into config.rope_parameters
+        rope_parameters = getattr(config, "rope_parameters", None)
+        if isinstance(rope_parameters, dict):
+            rope_theta = rope_parameters.get("rope_theta")
     if rope_theta is not None:
         params["rope_theta"] = rope_theta
 

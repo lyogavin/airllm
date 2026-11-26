@@ -82,6 +82,42 @@ class TestMlxRopeTheta(unittest.TestCase):
         args = get_model_args_from_config(_base_config(rope_theta=10000))
         self.assertEqual(args.rope_theta, 10000)
 
+    def test_transformers5_rope_parameters_theta_is_respected(self):
+        """transformers 5 keeps rope_theta in config.rope_parameters only."""
+        args = get_model_args_from_config(
+            _base_config(rope_parameters={"rope_type": "default", "rope_theta": 500000.0})
+        )
+        self.assertEqual(args.rope_theta, 500000.0)
+
+
+class TestMlxHeadDim(unittest.TestCase):
+    def test_explicit_head_dim_is_respected(self):
+        """Mistral NeMo: head_dim=128 while hidden_size // num_attention_heads == 160."""
+        args = get_model_args_from_config(_base_config(hidden_size=5120, head_dim=128))
+        self.assertEqual(args.head_dim, 128)
+
+    def test_missing_head_dim_is_derived(self):
+        args = get_model_args_from_config(_base_config())
+        self.assertEqual(args.head_dim, 4096 // 32)
+
+    def test_transformers_mistral_config(self):
+        """The config object AutoConfig returns, whatever transformers version is installed."""
+        from transformers import MistralConfig
+
+        config = MistralConfig(
+            hidden_size=5120,
+            intermediate_size=14336,
+            num_attention_heads=32,
+            num_key_value_heads=8,
+            head_dim=128,
+            num_hidden_layers=40,
+            vocab_size=131072,
+            rope_theta=1000000.0,
+        )
+        args = get_model_args_from_config(config)
+        self.assertEqual(args.head_dim, 128)
+        self.assertEqual(args.rope_theta, 1000000.0)
+
 
 if __name__ == "__main__":
     unittest.main()
