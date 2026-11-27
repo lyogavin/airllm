@@ -73,7 +73,28 @@ class AutoModel:
                 )
             return AirLLMLlamaMlx(pretrained_model_name_or_path, *inputs, **kwargs)
 
+        cls._check_requirements_before_loading(pretrained_model_name_or_path, *inputs, **kwargs)
         module, class_name = AutoModel.get_module_class(pretrained_model_name_or_path, *inputs, **kwargs)
         module = importlib.import_module(module)
         class_ = getattr(module, class_name)
         return class_(pretrained_model_name_or_path, *inputs, **kwargs)
+
+    @classmethod
+    def _check_requirements_before_loading(cls, pretrained_model_name_or_path, *inputs, **kwargs):
+        """Reject a known-incompatible checkpoint before it is split.
+
+        Only a local ``config.json`` is inspected -- a repo id here would mean an extra hub request
+        on every call, and the loader checks again right after it resolves the checkpoint anyway.
+        """
+        from .arch_requirements import (_checkpoint_keys, missing_requirements, read_config_json,
+                                        unsupported_reason)
+
+        local_config = read_config_json(pretrained_model_name_or_path)
+        keys = _checkpoint_keys(local_config) if local_config else set()
+        reason = unsupported_reason(keys)
+        if reason is not None:
+            raise RuntimeError(reason)
+        missing = missing_requirements(keys)
+        if missing:
+            print(f">>>> this checkpoint needs: pip install {' '.join(missing)}")
+
