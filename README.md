@@ -1,5 +1,11 @@
 ![airllm_logo](https://github.com/lyogavin/airllm/blob/main/assets/airllm_logo_sm.png?v=3&raw=true)
 
+<p align="center">
+  <a href="README.md"><strong>English</strong></a> ·
+  <a href="README_ru.md">Русский</a> ·
+  <a href="README_ja.md">日本語</a>
+</p>
+
 [**Quickstart**](#quickstart) | 
 [**Configurations**](#configurations) | 
 [**MacOS**](#macos) | 
