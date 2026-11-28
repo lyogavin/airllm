@@ -739,14 +739,17 @@ def train():
                 'eval': 'data/mmlu/zero_shot_mmlu_val.json',
                 'test': 'data/mmlu/zero_shot_mmlu_test.json',
             })
-            mmlu_dataset = mmlu_dataset.remove_columns('subject')
+            # Keep the 'subject' column: MMLUEvalCallback reports accuracy per subject.
         # MMLU Five-shot (Eval/Test only)
         elif args.mmlu_dataset == 'mmlu' or args.mmlu_dataset == 'mmlu-fs':
             mmlu_dataset = load_dataset("json", data_files={
                 'eval': 'data/mmlu/five_shot_mmlu_val.json',
                 'test': 'data/mmlu/five_shot_mmlu_test.json',
             })
-            # mmlu_dataset = mmlu_dataset.remove_columns('subject')
+        else:
+            raise ValueError(
+                f"Unknown --mmlu_dataset {args.mmlu_dataset!r}; expected 'mmlu-zs', 'mmlu' or 'mmlu-fs'."
+            )
         mmlu_dataset = mmlu_dataset[args.mmlu_split]
         if args.max_mmlu_samples is not None:
             mmlu_dataset = mmlu_dataset.select(range(args.max_mmlu_samples))
