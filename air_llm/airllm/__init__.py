@@ -36,6 +36,7 @@ else:
         ("AirLLMQwen4Exp", ".airllm_qwen4_exp"),
         ("AirLLMLoRA", ".airllm_lora"),
         ("AirLLMLoRAQwen4Exp", ".airllm_lora"),
+        ("AirLLMGemma4", ".airllm_gemma4"),
     ):
         try:
             _mod = __import__(__name__ + _module, fromlist=[_name])
@@ -45,4 +46,3 @@ else:
                 f"airllm: optional model class {_name} is unavailable ({_e}). "
                 f"This only affects that specific model family; the generic streaming path still works."
             )
-
