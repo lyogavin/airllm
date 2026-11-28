@@ -387,10 +387,14 @@ def print_trainable_parameters(args, model):
     trainable_params = 0
     all_param = 0
     for _, param in model.named_parameters():
-        all_param += param.numel()
+        num_params = param.numel()
+        # bitsandbytes packs two 4-bit weights into each uint8 element, so
+        # numel() undercounts quantized weights by half.
+        if args.bits == 4 and param.__class__.__name__ == 'Params4bit':
+            num_params *= 2
+        all_param += num_params
         if param.requires_grad:
-            trainable_params += param.numel()
-    if args.bits == 4: trainable_params /= 2
+            trainable_params += num_params
     logger.info(
         f"trainable params: {trainable_params} || "
         f"all params: {all_param} || "
@@ -805,7 +809,7 @@ def train():
     total = 0
     for k, v in dtypes.items(): total+= v
     for k, v in dtypes.items():
-        logger.info(k, v, v/total)
+        logger.info(f"{k}: {v} params ({v / total:.2%})")
 
     all_metrics = {"run_name": args.run_name}
     # Training
