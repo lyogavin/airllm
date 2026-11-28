@@ -713,12 +713,18 @@ def train():
         # Note that these are present in the vocabulary. 
         # Note also that `model.config.pad_token_id` is 0 which corresponds to `<unk>` token.
         logger.info('Adding special tokens.')
+        pad_token_id = model.config.pad_token_id
+        special_token_ids = {
+            "eos_token": model.config.eos_token_id,
+            "bos_token": model.config.bos_token_id,
+            "unk_token": pad_token_id if pad_token_id not in (None, -1) else tokenizer.pad_token_id,
+        }
+        # Many configs leave these ids unset (None); convert_ids_to_tokens(None)
+        # raises, so only add the tokens we actually have ids for.
         tokenizer.add_special_tokens({
-                "eos_token": tokenizer.convert_ids_to_tokens(model.config.eos_token_id),
-                "bos_token": tokenizer.convert_ids_to_tokens(model.config.bos_token_id),
-                "unk_token": tokenizer.convert_ids_to_tokens(                    
-                    model.config.pad_token_id if model.config.pad_token_id != -1 else tokenizer.pad_token_id
-                ),
+            name: tokenizer.convert_ids_to_tokens(token_id)
+            for name, token_id in special_token_ids.items()
+            if token_id is not None
         })
     data_module = make_data_module(tokenizer=tokenizer, args=args)
     trainer = Seq2SeqTrainer(
