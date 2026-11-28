@@ -2,8 +2,7 @@
 import argparse
 import json
 import time
-import gc
-from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
@@ -80,12 +79,9 @@ class RMSNorm(nn.Module):
         self.weight = mx.ones((dims,))
         self.eps = eps
 
-    def _norm(self, x):
-        return x * mx.rsqrt(x.square().mean(-1, keepdims=True) + self.eps)
-
     def __call__(self, x):
-        output = self._norm(x.astype(mx.float32)).astype(x.dtype)
-        return self.weight * output
+        # Fused kernel; accumulates in float32 internally like the old hand-written version.
+        return mx.fast.rms_norm(x, self.weight, self.eps)
 
 
 class Attention(nn.Module):
@@ -123,12 +119,8 @@ class Attention(nn.Module):
         keys = keys.reshape(B, L, self.n_kv_heads, -1).transpose(0, 2, 1, 3)
         values = values.reshape(B, L, self.n_kv_heads, -1).transpose(0, 2, 1, 3)
 
-        def repeat(a):
-            a = mx.concatenate([mx.expand_dims(a, 2)] * self.repeats, axis=2)
-            return a.reshape([B, self.n_heads, L, -1])
-
-        keys, values = map(repeat, (keys, values))
-
+        # Keys/values stay at n_kv_heads: the fused SDPA kernel handles grouped-query attention
+        # natively, so the KV cache is n_heads/n_kv_heads times smaller than pre-tiling it.
         if cache is not None:
             key_cache, value_cache = cache
             queries = self.rope(queries, offset=key_cache.shape[2])
@@ -139,11 +131,8 @@ class Attention(nn.Module):
             queries = self.rope(queries)
             keys = self.rope(keys)
 
-        scores = (queries * self.scale) @ keys.transpose(0, 1, 3, 2)
-        if mask is not None:
-            scores += mask
-        scores = mx.softmax(scores.astype(mx.float32), axis=-1).astype(scores.dtype)
-        output = (scores @ values).transpose(0, 2, 1, 3).reshape(B, L, -1)
+        output = mx.fast.scaled_dot_product_attention(queries, keys, values, scale=self.scale, mask=mask)
+        output = output.transpose(0, 2, 1, 3).reshape(B, L, -1)
         return self.wo(output), (keys, values)
 
 
@@ -205,7 +194,27 @@ def _coerce_to_mlx_array(x):
     return mx.array(x)
 
 
+def _readahead(path, chunk=16 << 20):
+    """Read a file into the OS page cache so the next mx.load() of it is served from RAM."""
+    try:
+        with open(path, 'rb', buffering=0) as f:
+            while f.read(chunk):
+                pass
+    except OSError:
+        pass
+
+
+def _tree_nbytes(tree):
+    # Imported here so the module still imports under the mocked mlx used by the CPU-only tests.
+    from mlx.utils import tree_flatten
+    return sum(v.nbytes for _, v in tree_flatten(tree) if isinstance(v, mx.array))
+
+
 class AirLLMLlamaMlx:
+
+    # Fraction of the RAM available at start-up that resident layers may use when
+    # layer_cache_bytes is left at "auto".
+    AUTO_CACHE_FRACTION = 0.5
 
     # customize layer names here
     def set_layer_names_dict(self):
@@ -228,12 +237,21 @@ class AirLLMLlamaMlx:
         consumed = self.initial_available - available
         max_consumed = self.initial_available - self.least_available
 
-        print(f"[{msg}] - available mem: {available:.02f}mb, consumed: {consumed:.02f}mb, least available:{available:.02f}mb, max consumed: {max_consumed:.02f}mb")
+        print(f"[{msg}] - available mem: {available:.02f}mb, consumed: {consumed:.02f}mb, least available:{self.least_available:.02f}mb, max consumed: {max_consumed:.02f}mb")
 
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
                  hf_token=None, prefetching=True, test_nonlayered=False, show_memory_util=False,
-                 delete_original=False):
+                 delete_original=False, layer_cache_bytes=0):
+        """
+        layer_cache_bytes: how much memory loaded layers may keep occupying between tokens.
+            0 (default) streams every layer from disk on every token, the same memory profile as
+            before. "auto" uses AUTO_CACHE_FRACTION of the RAM available at start-up, so a model
+            that fits is read from disk only once and anything that does not fit is still
+            streamed; an int is a byte budget; None means unlimited.
+        prefetching: read the next streamed layer's shard into the OS page cache on a worker
+            thread while the current layer computes.
+        """
 
         self.hf_token = hf_token
         self.set_layer_names_dict()
@@ -242,7 +260,15 @@ class AirLLMLlamaMlx:
         self.least_available = None
         self.initial_available = psutil.virtual_memory().available / 1024 / 1024
 
-
+        if test_nonlayered:
+            layer_cache_bytes = None
+        elif layer_cache_bytes == "auto":
+            layer_cache_bytes = int(psutil.virtual_memory().available * self.AUTO_CACHE_FRACTION)
+        self.layer_cache_bytes = layer_cache_bytes
+        self._resident = {}          # layer name -> built module kept in memory
+        self._resident_bytes = 0
+        self.prefetching = prefetching
+        self._executor = ThreadPoolExecutor(max_workers=1) if prefetching else None
 
         self.model_local_path, self.checkpoint_path = find_or_create_local_splitted_path(model_local_path_or_repo_id,
                                                                                          layer_shards_saving_path,
@@ -262,6 +288,11 @@ class AirLLMLlamaMlx:
                            [f'{self.layer_names_dict["layer_prefix"]}.{i}' for i in range(self.model_args.n_layers)] + \
                            [self.layer_names_dict['norm'], self.layer_names_dict['lm_head']]
 
+        lm_head_shard = Path(self.checkpoint_path) / (self.layer_names_dict['lm_head'] + ".mlx.npz")
+        self._tied_lm_head = not lm_head_shard.exists()
+        if self._tied_lm_head and not getattr(self.config, "tie_word_embeddings", False):
+            raise FileNotFoundError(f"lm_head shard not found: {lm_head_shard}")
+
         self.tokenizer = self.get_tokenizer(hf_token=hf_token)
 
 
@@ -273,11 +304,8 @@ class AirLLMLlamaMlx:
         the output projection shares the token embedding matrix, so load it from the embed shard.
         """
         persister = ModelPersister.get_model_persister()
-        lm_head_shard = Path(self.checkpoint_path) / (self.layer_names_dict['lm_head'] + ".mlx.npz")
-        if lm_head_shard.exists():
+        if not self._tied_lm_head:
             return persister.load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output']
-        if not getattr(self.config, "tie_word_embeddings", False):
-            raise FileNotFoundError(f"lm_head shard not found: {lm_head_shard}")
         return persister.load_model(self.layer_names_dict['embed'], self.checkpoint_path)['tok_embeddings']
 
     def get_tokenizer(self, hf_token=None):
@@ -286,191 +314,134 @@ class AirLLMLlamaMlx:
         else:
             return AutoTokenizer.from_pretrained(self.model_local_path, trust_remote_code=True)
 
+    # ---- module loading ---------------------------------------------------------------------
 
-    def generate(self, x, temperature=0, max_new_tokens=None, **kwargs):
+    def _shard_path(self, layer_name):
+        return str(Path(self.checkpoint_path) / (layer_name + ".mlx.npz"))
+
+    def _build(self, layer_name):
+        """Construct the module for layer_name and load its weights (lazily, via mx.load)."""
+        persister = ModelPersister.get_model_persister()
+        args = self.model_args
+        if layer_name == self.layer_names_dict['embed']:
+            module = nn.Embedding(args.vocab_size, args.dim)
+            module.update(persister.load_model(layer_name, self.checkpoint_path)['tok_embeddings'])
+        elif layer_name == self.layer_names_dict['norm']:
+            module = RMSNorm(args.dim, eps=args.norm_eps)
+            module.update(persister.load_model(layer_name, self.checkpoint_path)['norm'])
+        elif layer_name == self.layer_names_dict['lm_head']:
+            module = nn.Linear(args.dim, args.vocab_size, bias=False)
+            module.update(self.load_lm_head_weights())
+        else:
+            il = int(layer_name.rsplit('.', 1)[1])
+            module = TransformerBlock(args=args)
+            module.update(persister.load_model(layer_name, self.checkpoint_path)['layers'][il])
+        return module
+
+    def _get(self, layer_name):
+        """Return (module, resident). Resident modules stay in memory across tokens."""
+        module = self._resident.get(layer_name)
+        if module is not None:
+            return module, True
+        module = self._build(layer_name)
+        nbytes = _tree_nbytes(module.parameters())
+        budget = self.layer_cache_bytes
+        if budget is None or self._resident_bytes + nbytes <= budget:
+            self._resident[layer_name] = module
+            self._resident_bytes += nbytes
+            return module, True
+        return module, False
+
+    def _prefetch(self, layer_name):
+        """Warm the page cache for a layer that will have to be read from disk."""
+        if self._executor is None or layer_name in self._resident:
+            return
+        if layer_name == self.layer_names_dict['lm_head'] and self._tied_lm_head:
+            layer_name = self.layer_names_dict['embed']
+            if layer_name in self._resident:
+                return
+        self._executor.submit(_readahead, self._shard_path(layer_name))
+
+    def _project_out(self, x, embed_module):
+        """Apply the output projection to the last position's hidden state."""
+        x = x[:, -1]
+        if self._tied_lm_head:
+            # Tied weights: reuse the embedding matrix instead of loading it a second time.
+            if embed_module is None:
+                embed_module, _ = self._get(self.layer_names_dict['embed'])
+            return embed_module.as_linear(x)
+        lm_head, _ = self._get(self.layer_names_dict['lm_head'])
+        return lm_head(x)
+
+    def _step(self, x, mask, cache):
+        """Run one forward pass through every layer. Returns logits for the last position."""
+        names = self.layer_names
+        n_layers = self.model_args.n_layers
+
+        self.record_memory('before_tok_embeddings')
+        self._prefetch(names[1])
+        embed, embed_resident = self._get(names[0])
+        x = embed(x)
+        if not embed_resident:
+            mx.eval(x)          # bound memory: let the streamed embedding table go now
+            embed = None
+        self.record_memory('after_tok_embeddings')
+
+        first_pass = len(cache) == 0
+        for il in range(n_layers):
+            self._prefetch(names[il + 2])
+            layer, resident = self._get(names[il + 1])
+            x, c = layer(x, mask=mask, cache=None if first_pass else cache[il])
+            if first_pass:
+                cache.append(c)
+            else:
+                cache[il] = c
+            if not resident:
+                # Streamed layer: evaluate now so its weights can be released before the next
+                # one is loaded. Resident layers are left lazy and evaluated as one graph.
+                mx.eval(x, cache[il])
+            if self.show_memory_util:
+                self.record_memory(f'after layer {il}')
+
+        norm, _ = self._get(self.layer_names_dict['norm'])
+        x = norm(x)
+        if not self._tied_lm_head or embed is None:
+            self._prefetch(self.layer_names_dict['lm_head'])
+        y = self._project_out(x, embed)
+        mx.eval(y, cache)
+        self.record_memory('after_lmhead')
+        return y
+
+    # ---- generation -------------------------------------------------------------------------
+
+    def generate(self, x, temperature=0, max_new_tokens=20, **kwargs):
         x = _coerce_to_mlx_array(x)
         tokens = []
         for token in self.model_generate(x, temperature=temperature):
-            tokens.append(token)
-
-
+            tokens.append(token.item())
             if len(tokens) >= max_new_tokens:
                 break
-
-
-        s = self.tokenizer.decode([t.item() for t in tokens])
-        return s
+        return self.tokenizer.decode(tokens)
 
     def model_generate(self, x, temperature=0, max_new_tokens=None):
+        x = _coerce_to_mlx_array(x)
         cache = []
-        TEST_NO_LAYERED = True
 
-        # Make an additive causal mask. We will need that to process the prompt.
-        mask = nn.MultiHeadAttention.create_additive_causal_mask(x.shape[1])
+        # Additive causal mask for the prompt; single-token decode steps need none.
+        mask = None
+        if x.shape[1] > 1:
+            mask = nn.MultiHeadAttention.create_additive_causal_mask(x.shape[1]).astype(mx.float16)
 
-        # First we process the prompt x the same was as in __call__ but
-        # save the caches in cache
-
-        self.record_memory('before_tok_embeddings')
-        self.tok_embeddings = nn.Embedding(self.model_args.vocab_size, self.model_args.dim)
-        #w0 = self.tok_embeddings.weight[0][0]
-        mask = mask.astype(self.tok_embeddings.weight.dtype)
-
-        self.record_memory('before_loading_tok')
-        update_weights = ModelPersister.get_model_persister().load_model(self.layer_names_dict['embed'], self.checkpoint_path)
-
-        self.record_memory('after_loading_tok')
-        self.tok_embeddings.update(update_weights['tok_embeddings'])
-        #w1 = self.tok_embeddings.weight[0][0]
-
-        #assert w0 != w1, f"weight should change after updates, weights: {update_weights}"
-
-        x = self.tok_embeddings(x)
-        # force execution
-        mx.eval(x)
-
-        if not self.test_nonlayered:
-
-            del self.tok_embeddings
-            gc.collect()
-        else:
-            print(f"self.test_nonlayered:{self.test_nonlayered}, save layers")
-            self.layers = []
-
-        self.record_memory('after_tok_embeddings')
-        #for l in self.layers:
-
-        for il in tqdm(range(self.model_args.n_layers), desc='running layers'):
-            self.record_memory(f'before layer {il}')
-            l = TransformerBlock(args=self.model_args)
-            l.update(
-                ModelPersister.get_model_persister().load_model(f'{self.layer_names_dict["layer_prefix"]}.{il}',
-                                                                     self.checkpoint_path)['layers'][il]
-            )
-
-            x, c = l(x, mask=mask)
-            # force execution
-            mx.eval(x)
-            # We store the per layer cache in a simple python list
-            cache.append(c)
-
-            if not self.test_nonlayered:
-                del l
-                gc.collect()
-            else:
-                self.layers.append(l)
-            self.record_memory(f'after layer {il}')
-
-        self.record_memory('before_norm')
-        self.norm = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
-        self.norm.update(
-            ModelPersister.get_model_persister().load_model(self.layer_names_dict['norm'], self.checkpoint_path)['norm']
-        )
-        x = self.norm(x)
-        # force execution
-        mx.eval(x)
-        if not self.test_nonlayered:
-            del self.norm
-            gc.collect()
-        self.record_memory('after_norm')
-
-        # We only care about the last logits that generate the next token
-        self.record_memory('before_lmhead')
-        self.output = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
-        self.output.update(
-            self.load_lm_head_weights()
-        )
-        y = self.output(x[:, -1])
-        # force execution
-        mx.eval(y)
-
-        if not self.test_nonlayered:
-            del self.output
-            gc.collect()
-        self.record_memory('after_lmhead')
-        y = sample(y)
-
-
-        # y now has size [1]
-        # Since MLX is lazily evaluated nothing is computed yet.
-        # Calling y.item() would force the computation to happen at
-        # this point but we can also choose not to do that and let the
-        # user choose when to start the computation.
+        y = sample(self._step(x, mask, cache), temperature)
         yield y
 
-
-
-        # Now we parsed the prompt and generated the first token we
-        # need to feed it back into the model and loop to generate the
-        # rest.
-        while True:
-            # Unsqueezing the last dimension to add a sequence length
-            # dimension of 1
-            x = y[:, None]
-
-            if not self.test_nonlayered:
-                self.record_memory('before_tok_embeddings')
-                self.tok_embeddings = nn.Embedding(self.model_args.vocab_size, self.model_args.dim)
-                #w0 = self.tok_embeddings.weight[0][0]
-                self.tok_embeddings.update(
-                    ModelPersister.get_model_persister().load_model(self.layer_names_dict['embed'], self.checkpoint_path)['tok_embeddings'])
-                #w1 = self.tok_embeddings.weight[0][0]
-
-                #assert w0 != w1, f"weight should change after updates."
-            x = self.tok_embeddings(x)
-
-            # force execution
-            mx.eval(x)
-            if not self.test_nonlayered:
-                del self.tok_embeddings
-                gc.collect()
-            self.record_memory('after_tok_embeddings')
-
-            for i in tqdm(range(len(cache)), desc='running layers'):
-                self.record_memory(f'before layer {il}')
-                # We are overwriting the arrays in the cache list. When
-                # the computation will happen, MLX will be discarding the
-                # old cache the moment it is not needed anymore.
-
-                if not self.test_nonlayered:
-                    l = TransformerBlock(args=self.model_args)
-                    l.update(ModelPersister.get_model_persister().load_model(f'{self.layer_names_dict["layer_prefix"]}.{i}',
-                                                                             self.checkpoint_path)['layers'][i])
-                else:
-                    l = self.layers[i]
-
-                x, cache[i] = l(x, mask=None, cache=cache[i])
-                # force execution
-                mx.eval(x)
-                if not self.test_nonlayered:
-                    del l
-                    gc.collect()
-                self.record_memory(f'after layer {il}')
-
-            self.record_memory('before_norm')
-            if not self.test_nonlayered:
-                self.norm = RMSNorm(self.model_args.dim, eps=self.model_args.norm_eps)
-                self.norm.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['norm'], self.checkpoint_path)['norm'])
-            x = self.norm(x)
-            # force execution
-            mx.eval(x)
-
-            if not self.test_nonlayered:
-                del self.norm
-                gc.collect()
-
-            self.record_memory('after_norm')
-
-            if not self.test_nonlayered:
-                self.output = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
-                self.output.update(self.load_lm_head_weights())
-            y = sample(self.output(x[:, -1]))
-
-            # force execution
-            mx.eval(y)
-            if not self.test_nonlayered:
-                del self.output
-                gc.collect()
-
-            self.record_memory('after_lmhead')
+        n = 1
+        while max_new_tokens is None or n < max_new_tokens:
+            y = sample(self._step(y[:, None], None, cache), temperature)
+            n += 1
             yield y
+
+    def clear_layer_cache(self):
+        """Drop resident layers (e.g. to free memory between prompts)."""
+        self._resident.clear()
+        self._resident_bytes = 0
