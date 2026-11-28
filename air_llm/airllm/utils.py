@@ -75,13 +75,21 @@ class NotEnoughSpaceException(Exception):
     pass
 
 # Function to clean RAM & vRAM
+def _load_malloc_trim():
+    # glibc only; looked up once instead of dlopen-ing (and failing, off Linux) on every call.
+    try:
+        return ctypes.CDLL("libc.so.6").malloc_trim
+    except (OSError, AttributeError):
+        return None
+
+
+_malloc_trim = _load_malloc_trim()
+
+
 def clean_memory():
     gc.collect()
-    try:
-        ctypes.CDLL("libc.so.6").malloc_trim(0)
-    except Exception as ex:
-        # maybe platform
-        pass
+    if _malloc_trim is not None:
+        _malloc_trim(0)
     torch.cuda.empty_cache()
 
 
