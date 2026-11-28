@@ -429,8 +429,11 @@ class DataCollatorForCausalLM(object):
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         # Extract elements
-        sources = [f"{self.tokenizer.bos_token}{example['input']}" for example in instances]
-        targets = [f"{example['output']}{self.tokenizer.eos_token}" for example in instances]
+        # Some tokenizers have no BOS/EOS token; don't insert the string "None".
+        bos_token = self.tokenizer.bos_token or ''
+        eos_token = self.tokenizer.eos_token or ''
+        sources = [f"{bos_token}{example['input']}" for example in instances]
+        targets = [f"{example['output']}{eos_token}" for example in instances]
         # Tokenize
         tokenized_sources_with_prompt = self.tokenizer(
             sources,
