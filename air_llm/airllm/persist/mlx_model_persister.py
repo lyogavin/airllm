@@ -13,46 +13,34 @@ from itertools import starmap
 
 
 
+# Ordered (old, new) substring renames from HF/torch parameter names to the MLX module names.
+_TORCH_TO_MLX_RENAMES = (
+    ("model.", ""),
+    ("mlp", "feed_forward"),
+    ("down_proj", "w2"),
+    ("up_proj", "w3"),
+    ("gate_proj", "w1"),
+    ("input_layernorm", "attention_norm"),
+    ("post_attention_layernorm", "ffn_norm"),
+    ("lm_head", "output"),
+    ("embed_tokens", "tok_embeddings"),
+    ("self_attn", "attention"),
+    ("q_proj", "wq"),
+    ("k_proj", "wk"),
+    ("v_proj", "wv"),
+    ("o_proj", "wo"),
+)
+
+
+def _rename(key):
+    for old, new in _TORCH_TO_MLX_RENAMES:
+        key = key.replace(old, new)
+    return key
+
+
 def map_torch_to_mlx(model):
-
-    # things to change
-    # 1. there's no "model." in the weight names
-    model = {k.replace("model.", ""): v for k, v in model.items()}
-
-    # 2. mlp is called feed_forward
-    model = {k.replace("mlp", "feed_forward"): v for k, v in model.items()}
-
-    # 3. up_proj, down_proj, gate_proj
-    model = {k.replace("down_proj", "w2"): v for k, v in model.items()}
-    model = {k.replace("up_proj", "w3"): v for k, v in model.items()}
-    model = {k.replace("gate_proj", "w1"): v for k, v in model.items()}
-
-    # 4. layernorms
-    model = {
-        k.replace("input_layernorm", "attention_norm"): v for k, v in model.items()
-    }
-    model = {
-        k.replace("post_attention_layernorm", "ffn_norm"): v for k, v in model.items()
-    }
-
-    # 5. lm head
-    model = {k.replace("lm_head", "output"): v for k, v in model.items()}
-
-    # 6. token emb
-    model = {k.replace("embed_tokens", "tok_embeddings"): v for k, v in model.items()}
-
-    # 7. attention
-    model = {k.replace("self_attn", "attention"): v for k, v in model.items()}
-    model = {k.replace("q_proj", "wq"): v for k, v in model.items()}
-    model = {k.replace("k_proj", "wk"): v for k, v in model.items()}
-    model = {k.replace("v_proj", "wv"): v for k, v in model.items()}
-    model = {k.replace("o_proj", "wo"): v for k, v in model.items()}
-
-
-    #weights = {k: v.to(torch.float16).numpy() for k, v in model.items()}
-
-
-    return model
+    # One pass over the dict instead of rebuilding it once per rename.
+    return {_rename(k): v for k, v in model.items()}
 
 class MlxModelPersister(ModelPersister):
 
